@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 # Agentic AI: Research Assistant Agent
 
 This repository contains the implementation of the **Research Assistant Agent**, built using the **14-Lab Method**. The system transforms manual academic research workflows into a multi-agent, human-gated pipeline.
@@ -33,3 +34,6 @@ research_agent/
 ├── karthik_plan.py          # Plan blueprint generation
 ├── main.py                  # The apniLeap AURA Coordinator
 └── README.md                # Project documentation
+=======
+# AgenticAI-Research-Assistant-Agent
+>>>>>>> 46669e22d4a3cb9e08f7958bef8d902cc304efdf
