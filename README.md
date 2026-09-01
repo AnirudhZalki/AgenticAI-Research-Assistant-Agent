@@ -1,4 +1,3 @@
-<<<<<<< HEAD
 # Agentic AI: Research Assistant Agent
 
 This repository contains the implementation of the **Research Assistant Agent**, built using the **14-Lab Method**. The system transforms manual academic research workflows into a multi-agent, human-gated pipeline.
