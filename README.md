@@ -1,6 +1,6 @@
 # Agentic AI: Research Assistant Agent
 
-This repository contains the implementation of the **Research Assistant Agent**, built using the **14-Lab Method**. The system transforms manual academic research workflows into a multi-agent, human-gated pipeline.
+This repository contains the implementation of the **Research Assistant Agent**. The system transforms manual academic research workflows into a multi-agent, human-gated pipeline.
 
 > **Guiding Principle:** Agents draft and flag; a named human approves. No consequential action is taken autonomously.
 
@@ -11,7 +11,7 @@ We have successfully built the initial `apniLeap AURA Coordinator` loop and the 
 * **Lab 1 (Agent vs Chatbot):** Established the `clarify → plan → revise` loop. The agent refuses to answer vague prompts and instead builds a locked, human-approved research plan.
 * **Lab 2 (Tool-Using Agent):** Replaced LLM hallucinations with real data tools. The agent reads from mock scholarly databases (`corpus.json`, `library.json`) and strictly validates all retrieved data.
 
-## 👥 Team Roles & Contributions
+## Team Roles & Contributions
 
 The workload was distributed to mirror the agentic node graph:
 
@@ -34,5 +34,3 @@ research_agent/
 ├── main.py                  # The apniLeap AURA Coordinator
 └── README.md                # Project documentation
 =======
-# AgenticAI-Research-Assistant-Agent
->>>>>>> 46669e22d4a3cb9e08f7958bef8d902cc304efdf
