@@ -1,7 +1,18 @@
 [
     {
         "id": "L001",
-        "title": "My Previous Work on Neural Networks",
-        "year": 2021
+        "title": "My Previous Work on Lightweight Embedded Neural Networks",
+        "authors": ["Faculty Author", "Co-Author A"],
+        "year": 2023,
+        "venue": "IEEE Embedded Systems Conference",
+        "doi": "10.1109/IESC.2023.8001"
+    },
+    {
+        "id": "L002",
+        "title": "A Primer on Hardware-Aware Model Compression",
+        "authors": ["Faculty Author"],
+        "year": 2022,
+        "venue": "ACM Computing Surveys",
+        "doi": "10.1145/ACMCS.2022.8002"
     }
 ]

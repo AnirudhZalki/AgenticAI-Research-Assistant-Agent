@@ -1,0 +1,250 @@
+{
+  "state": {
+    "run_id": "run-1790506171",
+    "status": "PIPELINE_RUNNING",
+    "context": {}
+  },
+  "audit_log": [
+    {
+      "step_index": 1,
+      "timestamp": "2026-09-27 16:20:58",
+      "intent": "Graph Init",
+      "action": "Initializing run context",
+      "status": "SUCCESS",
+      "result_summary": "{'topic': 'machine learning'}"
+    },
+    {
+      "step_index": 2,
+      "timestamp": "2026-09-27 16:20:58",
+      "intent": "Literature Discovery",
+      "action": "Search & Rank Corpus",
+      "status": "SUCCESS",
+      "result_summary": "2"
+    },
+    {
+      "step_index": 3,
+      "timestamp": "2026-09-27 16:20:58",
+      "intent": "Gap Analysis",
+      "action": "Analyze Novelty vs Overlap",
+      "status": "SUCCESS",
+      "result_summary": "GENUINELY UNDER-EXPLORED"
+    },
+    {
+      "step_index": 4,
+      "timestamp": "2026-09-27 16:20:58",
+      "intent": "Drafting",
+      "action": "Generate Outline & Draft Sections",
+      "status": "SUCCESS",
+      "result_summary": "5"
+    },
+    {
+      "step_index": 5,
+      "timestamp": "2026-09-27 16:20:58",
+      "intent": "Citation Compliance",
+      "action": "Validate References & Guidelines",
+      "status": "SUCCESS",
+      "result_summary": "{'total_references': 2, 'missing_dois': [], 'self_citations_available': 2, 'compliance_passed': True}"
+    },
+    {
+      "step_index": 6,
+      "timestamp": "2026-09-27 16:20:58",
+      "intent": "Radar Agent",
+      "action": "Scan Deadlines & CFPs",
+      "status": "SUCCESS",
+      "result_summary": "3"
+    },
+    {
+      "step_index": 7,
+      "timestamp": "2026-09-27 16:20:58",
+      "intent": "Collaboration",
+      "action": "Sync Co-Author Ownership",
+      "status": "SUCCESS",
+      "result_summary": "{'collaborators': ['Faculty Author (lead)', 'Co-Author A (member)'], 'section_ownership': {'1. Introduction': 'Faculty Author', '2. Literature Review': 'Faculty Author', '3. Methodology & Hardware Porting': 'Co-Author A', '4. Experimental Evaluation': 'Co-Author A', '5. Conclusion & Future Work': 'F"
+    },
+    {
+      "step_index": 8,
+      "timestamp": "2026-09-27 16:20:58",
+      "intent": "Validation Check",
+      "action": "Acceptance Gate Evaluation",
+      "status": "PASS",
+      "result_summary": "{'passed': True, 'failing_checks': [], 'passed_checks': ['Every claim cites a real source (no fabricated citations)', 'Gap analysis evaluates topic novelty vs literature', 'Draft structure contains all required sections', 'Citation compliance & reference formatting passed'], 'diagnosis': 'All valida"
+    },
+    {
+      "step_index": 9,
+      "timestamp": "2026-09-27 16:21:13",
+      "intent": "Human Gate: Publish Formatted Research Paper",
+      "action": "Faculty Review",
+      "status": "APPROVED",
+      "result_summary": "APPROVED"
+    },
+    {
+      "step_index": 10,
+      "timestamp": "2026-09-27 16:21:13",
+      "intent": "Export",
+      "action": "Archive Approved Document",
+      "status": "SUCCESS",
+      "result_summary": "v1.0-approved"
+    }
+  ],
+  "session_state": {
+    "active_plan": {
+      "title": "A Systematic Investigation into Machine Learning",
+      "venue": "GITAM UNIVERSITY, BANGLORE",
+      "deadline": "2026-11-15",
+      "collaborators": [
+        "Me",
+        "you",
+        "him"
+      ],
+      "sections": [
+        "1. Abstract & Introduction",
+        "2. Related Work & Literature Discovery",
+        "3. Gap Analysis & Research Novelty",
+        "4. Methodology & Proposed Architecture",
+        "5. Experimental Setup & Benchmarks",
+        "6. Conclusion & Future Outlook"
+      ],
+      "word_limit": 3000,
+      "citation_style": "IEEE",
+      "locked": true
+    },
+    "current_draft": null,
+    "working_notes": [],
+    "clarified_state": {
+      "topic": "machine learning",
+      "venue": "GITAM UNIVERSITY, BANGLORE",
+      "collaborators": "Me, you, him",
+      "deadline": "2026-11-15"
+    },
+    "swarm_discovery": {
+      "target_topic": "machine learning",
+      "total_workers_executed": 4,
+      "total_unique_papers": 4,
+      "total_unique_deadlines": 2,
+      "consolidated_papers": [
+        {
+          "id": "C002",
+          "title": "Machine Learning in Healthcare Diagnostics",
+          "authors": [
+            "C. Zhang",
+            "D. Kumar"
+          ],
+          "year": 2023,
+          "venue": "ACM Journal of Healthcare Informatics",
+          "abstract": "A comprehensive study on transformer architectures applied to medical imaging and clinical diagnostic prediction.",
+          "keywords": [
+            "machine learning",
+            "healthcare",
+            "diagnostics",
+            "transformers",
+            "imaging"
+          ],
+          "doi": "10.1145/ACMHI.2023.2002"
+        },
+        {
+          "id": "C001",
+          "title": "Edge AI Hardware Porting Frameworks: A Survey",
+          "authors": [
+            "A. Sharma",
+            "B. Patel"
+          ],
+          "year": 2024,
+          "venue": "IEEE Transactions on Edge Computing",
+          "abstract": "We review lightweight compilation and quantisation pipelines for porting Deep Learning models to resource-constrained microcontrollers.",
+          "keywords": [
+            "edge AI",
+            "hardware porting",
+            "microcontrollers",
+            "quantisation",
+            "embedded"
+          ],
+          "doi": "10.1109/TEDG.2024.1001"
+        },
+        {
+          "id": "C005",
+          "title": "Benchmark Protocols for Edge Acceleration Frameworks",
+          "authors": [
+            "G. Thorne",
+            "H. Zhao"
+          ],
+          "year": 2023,
+          "venue": "IEEE Embedded Systems Letters",
+          "abstract": "Establishes standardized benchmark metrics for measuring latency, peak SRAM usage, and power draw across edge inference runtimes.",
+          "keywords": [
+            "edge AI",
+            "benchmarking",
+            "hardware porting",
+            "latency",
+            "SRAM"
+          ],
+          "doi": "10.1109/LEMB.2023.5005"
+        },
+        {
+          "id": "C004",
+          "title": "Optimizing On-Device Neural Execution on Heterogeneous Microcontrollers",
+          "authors": [
+            "A. Sharma",
+            "K. V. Rao"
+          ],
+          "year": 2025,
+          "venue": "IEEE Micro",
+          "abstract": "Presents runtime execution scheduling and dynamic memory allocation routines for low-power edge TPU acceleration.",
+          "keywords": [
+            "edge AI",
+            "microcontrollers",
+            "heterogeneous compute",
+            "on-device execution"
+          ],
+          "doi": "10.1109/MM.2025.4004"
+        }
+      ],
+      "consolidated_deadlines": [
+        {
+          "id": "D001",
+          "title": "IEEE Conference on Edge Computing Special Issue",
+          "type": "Journal Call for Papers",
+          "deadline": "2026-11-15",
+          "topics": [
+            "edge AI",
+            "hardware porting",
+            "embedded systems"
+          ],
+          "url": "https://ieee-edge2026.org/cfp"
+        },
+        {
+          "id": "D003",
+          "title": "ACM Transactions on Embedded Computing Systems",
+          "type": "Regular Journal Issue",
+          "deadline": "2026-10-30",
+          "topics": [
+            "hardware porting",
+            "quantisation",
+            "benchmarking"
+          ],
+          "url": "https://tecs.acm.org/submit"
+        }
+      ],
+      "best_aligned_paper": {
+        "id": "C002",
+        "title": "Machine Learning in Healthcare Diagnostics",
+        "authors": [
+          "C. Zhang",
+          "D. Kumar"
+        ],
+        "year": 2023,
+        "venue": "ACM Journal of Healthcare Informatics",
+        "abstract": "A comprehensive study on transformer architectures applied to medical imaging and clinical diagnostic prediction.",
+        "keywords": [
+          "machine learning",
+          "healthcare",
+          "diagnostics",
+          "transformers",
+          "imaging"
+        ],
+        "doi": "10.1145/ACMHI.2023.2002"
+      },
+      "swarm_wall_clock_time_sec": 0.032
+    }
+  },
+  "current_step": 10
+}

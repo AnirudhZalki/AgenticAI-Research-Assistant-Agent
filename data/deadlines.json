@@ -1,0 +1,26 @@
+[
+    {
+        "id": "D001",
+        "title": "IEEE Conference on Edge Computing Special Issue",
+        "type": "Journal Call for Papers",
+        "deadline": "2026-11-15",
+        "topics": ["edge AI", "hardware porting", "embedded systems"],
+        "url": "https://ieee-edge2026.org/cfp"
+    },
+    {
+        "id": "D002",
+        "title": "National Science Foundation: Artificial Intelligence Research Grant",
+        "type": "Funding Grant Call",
+        "deadline": "2026-12-01",
+        "topics": ["edge AI", "healthcare AI", "responsible AI"],
+        "url": "https://nsf.gov/grants/ai-2026"
+    },
+    {
+        "id": "D003",
+        "title": "ACM Transactions on Embedded Computing Systems",
+        "type": "Regular Journal Issue",
+        "deadline": "2026-10-30",
+        "topics": ["hardware porting", "quantisation", "benchmarking"],
+        "url": "https://tecs.acm.org/submit"
+    }
+]

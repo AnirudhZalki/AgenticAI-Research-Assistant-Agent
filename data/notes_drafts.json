@@ -1,0 +1,17 @@
+{
+    "collaborators": ["Faculty Author (lead)", "Co-Author A (member)"],
+    "section_ownership": {
+        "1. Introduction": "Faculty Author",
+        "2. Literature Review": "Faculty Author",
+        "3. Methodology & Hardware Porting": "Co-Author A",
+        "4. Experimental Evaluation": "Co-Author A",
+        "5. Conclusion & Future Work": "Faculty Author"
+    },
+    "coauthor_edits": [
+        {
+            "author": "Co-Author A",
+            "section": "3. Methodology & Hardware Porting",
+            "note": "Added benchmark measurements for Cortex-M55 microcontroller target."
+        }
+    ]
+}

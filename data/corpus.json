@@ -1,17 +1,52 @@
 [
     {
         "id": "C001",
-        "title": "Machine Learning in Healthcare",
-        "year": 2023
+        "title": "Edge AI Hardware Porting Frameworks: A Survey",
+        "authors": ["A. Sharma", "B. Patel"],
+        "year": 2024,
+        "venue": "IEEE Transactions on Edge Computing",
+        "abstract": "We review lightweight compilation and quantisation pipelines for porting Deep Learning models to resource-constrained microcontrollers.",
+        "keywords": ["edge AI", "hardware porting", "microcontrollers", "quantisation", "embedded"],
+        "doi": "10.1109/TEDG.2024.1001"
     },
     {
         "id": "C002",
-        "title": "The Future of AI Diagnostics",
-        "year": 2024
+        "title": "Machine Learning in Healthcare Diagnostics",
+        "authors": ["C. Zhang", "D. Kumar"],
+        "year": 2023,
+        "venue": "ACM Journal of Healthcare Informatics",
+        "abstract": "A comprehensive study on transformer architectures applied to medical imaging and clinical diagnostic prediction.",
+        "keywords": ["machine learning", "healthcare", "diagnostics", "transformers", "imaging"],
+        "doi": "10.1145/ACMHI.2023.2002"
     },
     {
         "id": "C003",
-        "title": "Ethics in Medical AI",
-        "year": 2022
+        "title": "Ethics and Auditing in Medical Artificial Intelligence",
+        "authors": ["E. R. Miller", "F. Gupta"],
+        "year": 2022,
+        "venue": "Journal of AI Ethics & Society",
+        "abstract": "Frameworks for bias mitigation, explainability, and regulatory compliance in automated diagnostic decision support systems.",
+        "keywords": ["ethics", "medical AI", "bias", "explainability", "governance"],
+        "doi": "10.1007/JAIES.2022.3003"
+    },
+    {
+        "id": "C004",
+        "title": "Optimizing On-Device Neural Execution on Heterogeneous Microcontrollers",
+        "authors": ["A. Sharma", "K. V. Rao"],
+        "year": 2025,
+        "venue": "IEEE Micro",
+        "abstract": "Presents runtime execution scheduling and dynamic memory allocation routines for low-power edge TPU acceleration.",
+        "keywords": ["edge AI", "microcontrollers", "heterogeneous compute", "on-device execution"],
+        "doi": "10.1109/MM.2025.4004"
+    },
+    {
+        "id": "C005",
+        "title": "Benchmark Protocols for Edge Acceleration Frameworks",
+        "authors": ["G. Thorne", "H. Zhao"],
+        "year": 2023,
+        "venue": "IEEE Embedded Systems Letters",
+        "abstract": "Establishes standardized benchmark metrics for measuring latency, peak SRAM usage, and power draw across edge inference runtimes.",
+        "keywords": ["edge AI", "benchmarking", "hardware porting", "latency", "SRAM"],
+        "doi": "10.1109/LEMB.2023.5005"
     }
 ]
