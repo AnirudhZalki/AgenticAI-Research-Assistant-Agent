@@ -25,9 +25,14 @@ class ResearchDataConnector:
         self.access_log.append(entry)
 
     def read_paper_corpus(self, keyword: str = "", agent_id: str = "AnonymousAgent") -> List[Dict[str, Any]]:
-        """Governed endpoint: Read scholarly paper corpus."""
+        """Governed endpoint: Read scholarly paper corpus (local JSON store)."""
         self._log_access("read_paper_corpus", {"keyword": keyword}, agent_id)
         return self._tools.read_corpus(keyword)
+
+    def search_online_papers(self, query: str, max_results: int = 6, agent_id: str = "AnonymousAgent") -> List[Dict[str, Any]]:
+        """Governed endpoint: Fetch real scholarly papers from live academic APIs (Semantic Scholar → CrossRef → OpenAlex → local fallback)."""
+        self._log_access("search_online_papers", {"query": query, "max_results": max_results}, agent_id)
+        return self._tools.search_online(query, max_results)
 
     def read_researcher_library(self, agent_id: str = "AnonymousAgent") -> List[Dict[str, Any]]:
         """Governed endpoint: Read researcher's personal prior papers library."""
@@ -51,5 +56,10 @@ class ResearchDataConnector:
 if __name__ == "__main__":
     connector = ResearchDataConnector()
     papers = connector.read_paper_corpus("edge", agent_id="LiteratureDiscoveryAgent")
-    print(f"Connector endpoint returned {len(papers)} papers.")
+    print(f"[Local] Connector returned {len(papers)} papers.")
+    print("\n[Online] Fetching live papers for 'federated learning healthcare'...")
+    live = connector.search_online_papers("federated learning healthcare", max_results=3, agent_id="TestAgent")
+    for p in live:
+        print(f"  - [{p.get('source','local')}] {p['title']} ({p['year']}) — {p['venue']}")
     print("Access Log:", connector.get_audit_trail())
+

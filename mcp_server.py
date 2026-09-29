@@ -21,12 +21,28 @@ class MCPServer:
         return {
             "read_paper_corpus": Tool(
                 name="read_paper_corpus",
-                description="Searches mock scholarly database for papers matching keyword in title, abstract, or keywords.",
+                description="Searches local scholarly database for papers matching keyword in title, abstract, or keywords.",
                 inputSchema={
                     "type": "object",
                     "properties": {
                         "keyword": {"type": "string", "description": "Search keyword or topic query"}
                     }
+                }
+            ),
+            "search_online_papers": Tool(
+                name="search_online_papers",
+                description=(
+                    "Fetches REAL scholarly papers from live academic APIs "
+                    "(Semantic Scholar → CrossRef → OpenAlex → local fallback). "
+                    "Returns up to max_results papers with title, authors, year, venue, abstract, DOI."
+                ),
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "query": {"type": "string", "description": "Topic or keyword query sent to live academic APIs"},
+                        "max_results": {"type": "integer", "description": "Maximum number of papers to return (default 6)"}
+                    },
+                    "required": ["query"]
                 }
             ),
             "read_researcher_library": Tool(
@@ -72,6 +88,10 @@ class MCPServer:
         if name == "read_paper_corpus":
             kw = arguments.get("keyword", "")
             data = self.connector.read_paper_corpus(kw, agent_id=agent_id)
+        elif name == "search_online_papers":
+            query = arguments.get("query", "")
+            max_results = int(arguments.get("max_results", 6))
+            data = self.connector.search_online_papers(query, max_results=max_results, agent_id=agent_id)
         elif name == "read_researcher_library":
             data = self.connector.read_researcher_library(agent_id=agent_id)
         elif name == "read_funding_deadlines":
@@ -88,7 +108,11 @@ if __name__ == "__main__":
     mcp_server = MCPServer()
     print("MCP Server Tools Registered:")
     for t in mcp_server.list_tools():
-        print(f" - {t.name}: {t.description}")
-        
-    res = mcp_server.call_tool("read_paper_corpus", {"keyword": "edge"})
-    print("MCP Call Tool Output Sample:", res[0].text[:150])
+        print(f" - {t.name}: {t.description[:80]}")
+
+    print("\n[MCP] Calling search_online_papers for 'federated learning privacy'...")
+    res = mcp_server.call_tool("search_online_papers", {"query": "federated learning privacy", "max_results": 3})
+    papers = json.loads(res[0].text)
+    for p in papers:
+        print(f"  [{p.get('source','local')}] {p['title']} ({p['year']}) DOI: {p['doi']}")
+
