@@ -35,9 +35,9 @@ class ResearchPlanSkill:
 
         sections = [
             "1. Abstract & Introduction",
-            "2. Related Work & Literature Discovery",
-            "3. Gap Analysis & Research Novelty",
-            "4. Methodology & Proposed Architecture",
+            "2. Literature Review & Discovered Prior Work (5-6 Cited References)",
+            "3. Uniqueness & Novelty Decision (Why Our Work Is Unique)",
+            "4. Proposed Methodology & Architecture",
             "5. Experimental Setup & Benchmarks",
             "6. Conclusion & Future Outlook"
         ]
@@ -80,11 +80,13 @@ class FormattingSkill:
             formatted.append(f"{content}")
             
         formatted.append("\n--------------------------------------------------------------------------")
-        formatted.append("REFERENCES:")
+        formatted.append(f"REFERENCES (TOTAL CITED: {len(references)}):")
         if references:
             for idx, ref in enumerate(references, start=1):
                 if isinstance(ref, dict):
-                    formatted.append(f"  [{idx}] {', '.join(ref.get('authors', ['Anon']))}, \"{ref.get('title')}\", {ref.get('venue', 'Conf.')}, {ref.get('year', '2024')}. DOI: {ref.get('doi', 'N/A')}")
+                    authors_list = ref.get('authors', ['Anon'])
+                    authors_str = ", ".join(authors_list) if isinstance(authors_list, list) else str(authors_list)
+                    formatted.append(f"  [{idx}] {authors_str}, \"{ref.get('title')}\", {ref.get('venue', 'Conf.')}, {ref.get('year', '2024')}. DOI: {ref.get('doi', 'N/A')}")
                 else:
                     formatted.append(f"  [{idx}] {ref}")
         else:

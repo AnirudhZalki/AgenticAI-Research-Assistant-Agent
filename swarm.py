@@ -1,26 +1,32 @@
 """
 Lab 8: Parallel Swarm & Fan-Out / Fan-In Merge (Phase B - Orchestration)
 Parallelises per-unit work across multiple sub-queries or search topics concurrently using ThreadPoolExecutor.
-Merges multi-worker results using a MergeSelector key aligned to the locked research plan.
+Invokes MCP Tools via MCPServer and merges multi-worker results using a MergeSelector key aligned to the locked research plan.
 """
 
+import json
 import time
 import concurrent.futures
 from typing import List, Dict, Any
-from connector import ResearchDataConnector
+from mcp_server import MCPServer
 
 class SwarmWorker:
-    """Worker agent processing one sub-query or research unit in parallel."""
-    def __init__(self, worker_id: str, connector: ResearchDataConnector):
+    """Worker agent processing one sub-query or research unit in parallel using MCP tools."""
+    def __init__(self, worker_id: str, mcp_server: MCPServer):
         self.worker_id = worker_id
-        self.connector = connector
+        self.mcp_server = mcp_server
 
     def process_subquery(self, subquery: str) -> Dict[str, Any]:
         start_time = time.time()
-        print(f"    [Worker {self.worker_id}] Starting parallel discovery for sub-query: '{subquery}'...")
+        print(f"    [Worker {self.worker_id}] Starting parallel discovery for sub-query: '{subquery}' via MCP...")
         
-        papers = self.connector.read_paper_corpus(subquery, agent_id=f"SwarmWorker-{self.worker_id}")
-        deadlines = self.connector.read_funding_deadlines(subquery, agent_id=f"SwarmWorker-{self.worker_id}")
+        # Execute MCP Tool read_paper_corpus
+        corpus_res = self.mcp_server.call_tool("read_paper_corpus", {"keyword": subquery}, agent_id=f"SwarmWorker-{self.worker_id}")
+        papers = json.loads(corpus_res[0].text)
+
+        # Execute MCP Tool read_funding_deadlines
+        deadlines_res = self.mcp_server.call_tool("read_funding_deadlines", {"topic_keyword": subquery}, agent_id=f"SwarmWorker-{self.worker_id}")
+        deadlines = json.loads(deadlines_res[0].text)
         
         elapsed = time.time() - start_time
         result = {
@@ -31,7 +37,7 @@ class SwarmWorker:
             "count": len(papers),
             "execution_time_sec": round(elapsed, 4)
         }
-        print(f"    [Worker {self.worker_id}] Finished in {result['execution_time_sec']}s ({result['count']} papers found).")
+        print(f"    [Worker {self.worker_id}] Finished in {result['execution_time_sec']}s ({result['count']} papers found via MCP).")
         return result
 
 class MergeSelector:
@@ -54,7 +60,6 @@ class MergeSelector:
                     seen_deadline_ids.add(d["id"])
                     all_deadlines.append(d)
 
-        # Sort merged papers by relevance score (number of keywords matching target_topic)
         target_words = set(target_topic.lower().split())
         
         def alignment_score(paper):
@@ -78,8 +83,8 @@ class MergeSelector:
 
 class ParallelSwarm:
     """Parallel Swarm Orchestrator for Lab 8."""
-    def __init__(self, connector: ResearchDataConnector = None):
-        self.connector = connector if connector is not None else ResearchDataConnector()
+    def __init__(self, mcp_server: MCPServer = None):
+        self.mcp_server = mcp_server if mcp_server is not None else MCPServer()
         self.merger = MergeSelector()
 
     def run_swarm(self, subqueries: List[str], main_topic: str) -> Dict[str, Any]:
@@ -91,10 +96,9 @@ class ParallelSwarm:
         start_swarm_time = time.time()
         worker_results = []
         
-        # Parallel Execution using ThreadPoolExecutor
         with concurrent.futures.ThreadPoolExecutor(max_workers=len(subqueries)) as executor:
             future_to_query = {
-                executor.submit(SwarmWorker(f"W{idx+1}", self.connector).process_subquery, sq): sq 
+                executor.submit(SwarmWorker(f"W{idx+1}", self.mcp_server).process_subquery, sq): sq 
                 for idx, sq in enumerate(subqueries)
             }
             
@@ -109,7 +113,6 @@ class ParallelSwarm:
         total_swarm_wall_time = round(time.time() - start_swarm_time, 4)
         print(f"\nParallel Swarm Fan-Out Completed in total wall-clock time: {total_swarm_wall_time}s")
 
-        # Fan-In Merge
         merged_result = self.merger.merge(worker_results, target_topic=main_topic)
         merged_result["swarm_wall_clock_time_sec"] = total_swarm_wall_time
         return merged_result

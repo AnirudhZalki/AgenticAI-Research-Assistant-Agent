@@ -1,47 +1,49 @@
 """
 Research Assistant Agent - Main Orchestrator (Labs 1 through 8)
-apniLeap AURA Coordinator & Full Execution Pipeline
-
-Integrates:
-- Lab 1: Clarify -> Plan -> Revise Loop
-- Lab 2: Typed Tool Execution
-- Lab 3: Reusable Plan & Formatting Skills
-- Lab 4: Short-term Run State vs Long-term Memory & Retrieval
-- Lab 5: Governed MCP Data Connector
-- Lab 6: Audited Runtime & Checkpoints
-- Lab 7: Agentic Node Graph with Bounded Retry Back-Edge & Faculty Approval Gate
-- Lab 8: Parallel Swarm Fan-Out & Fan-In Selector Merge
+Multi-Framework Architecture:
+- OpenClaw: Agent Runtime Layer (State, Audit Logs, Checkpoints, Human Gates)
+- LangChain: Orchestration Layer (Runnable Sequence & RunnableLambda)
+- MCP (Model Context Protocol): Tool & Data Access Layer (Typed Tool Server)
 """
 
 import sys
 import argparse
 from clarify import RequestClarifier
 from search import SearchTools
-from skills import ResearchPlanSkill, FormattingSkill
+from skills import ResearchPlanSkill
 from memory import MemoryStore
 from connector import ResearchDataConnector
-from runtime import AgentRuntime
+from mcp_server import MCPServer
+from openclaw_runtime import OpenClawAgentRuntime
+from langchain_orchestrator import LangChainOrchestrator
 from swarm import ParallelSwarm
 from node_graph import ResearchNodeGraph
 
 def run_research_assistant_pipeline(interactive: bool = True, auto_approve: bool = False):
     print("==========================================================================")
-    print("        RESEARCH ASSISTANT AGENT (LABS 1 - 8 COMPLETE PIPELINE)           ")
+    print("        RESEARCH ASSISTANT AGENT (LANGCHAIN + OPENCLAW + MCP PIPELINE)   ")
     print("        Guiding Principle: Agents draft and flag; faculty approves.       ")
     print("==========================================================================\n")
 
-    # 1. Initialize Core Foundations (Labs 2, 4, 5, 6)
+    # 1. Initialize Tool / Data Layer (MCP Standard)
     search_tools = SearchTools()
     connector = ResearchDataConnector(search_tools)
+    mcp_server = MCPServer(connector)
     memory = MemoryStore(corpus=search_tools.corpus, library=search_tools.library)
-    runtime = AgentRuntime(connector=connector, memory=memory)
 
-    # 2. Lab 1: Clarify Intent & Parameters
+    # 2. Initialize OpenClaw Agent Runtime & LangChain Orchestrator
+    runtime = OpenClawAgentRuntime()
+    orchestrator = LangChainOrchestrator(mcp_server=mcp_server)
+
+    print(f"Agent Runtime Engine: {runtime.state['runtime_engine']}")
+    print(f"MCP Server Tools Loaded: {len(mcp_server.list_tools())} tools registered.")
+
+    # 3. Lab 1: Clarify Intent & Parameters
     clarifier = RequestClarifier()
     clarified_state = clarifier.clarify(interactive=interactive)
     memory.update_session("clarified_state", clarified_state)
 
-    # 3. Lab 3: Plan Skill - Generate & Lock Blueprint
+    # 4. Lab 3: Plan Skill - Generate & Lock Blueprint
     plan_skill = ResearchPlanSkill()
     blueprint = plan_skill.execute(clarified_state)
     memory.update_session("active_plan", blueprint)
@@ -56,8 +58,8 @@ def run_research_assistant_pipeline(interactive: bool = True, auto_approve: bool
         print(f"  - {sec}")
     print("--------------------------------------------------------------------------\n")
 
-    # 4. Lab 8: Parallel Swarm Discovery Fan-Out & Merge
-    swarm = ParallelSwarm(connector)
+    # 5. Lab 8: Parallel Swarm Discovery via MCP & LangChain
+    swarm = ParallelSwarm(mcp_server=mcp_server)
     subqueries = [
         clarified_state["topic"].split()[0],
         "hardware porting",
@@ -67,8 +69,8 @@ def run_research_assistant_pipeline(interactive: bool = True, auto_approve: bool
     swarm_merged = swarm.run_swarm(subqueries, main_topic=clarified_state["topic"])
     memory.update_session("swarm_discovery", swarm_merged)
 
-    # 5. Lab 7: Agentic Node Graph Execution
-    graph = ResearchNodeGraph(runtime=runtime)
+    # 6. Lab 7: Multi-Framework Agentic Node Graph Execution
+    graph = ResearchNodeGraph(runtime=runtime, orchestrator=orchestrator)
     final_ctx = graph.run_graph(
         initial_request={
             "topic": clarified_state["topic"],
@@ -80,7 +82,7 @@ def run_research_assistant_pipeline(interactive: bool = True, auto_approve: bool
         auto_approve_gate=auto_approve
     )
 
-    # 6. Output Final Research Brief Report & Audit Trail
+    # 7. Output Final Published Brief & Audit Summary
     if runtime.state.get("status") == "PUBLISHED":
         print("\n==========================================================================")
         print("          FINAL PUBLISHED & ARCHIVED RESEARCH BRIEF (LAB 1-8)             ")
@@ -90,8 +92,8 @@ def run_research_assistant_pipeline(interactive: bool = True, auto_approve: bool
         for dl in final_ctx.get("radar_deadlines", []):
             print(f"  - [{dl.get('type')}] {dl.get('title')} (Deadline: {dl.get('deadline')}) -> {dl.get('url')}")
             
-        print("\nConnector Access Log Entries:", len(connector.get_audit_trail()))
-        print("Runtime Audit Log Step Count:", len(runtime.audit_log))
+        print("\nMCP Connector Access Log Entries:", len(connector.get_audit_trail()))
+        print("OpenClaw Runtime Audit Log Step Count:", len(runtime.audit_log))
         print("==========================================================================\n")
         print("Pipeline finished successfully!")
     else:

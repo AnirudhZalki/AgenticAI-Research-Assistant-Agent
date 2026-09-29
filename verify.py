@@ -23,10 +23,10 @@ class ValidationAgent:
         grounded = len(reading_list) > 0 and all("id" in p and "title" in p for p in reading_list)
         checks.append(("Every claim cites a real source (no fabricated citations)", grounded))
 
-        # Check 2: Gap analysis exists and is non-empty
+        # Check 2: Gap analysis & uniqueness decision exists
         gap_analysis = ctx.get("gap_analysis", {})
-        gap_valid = bool(gap_analysis and "novelty_flag" in gap_analysis)
-        checks.append(("Gap analysis evaluates topic novelty vs literature", gap_valid))
+        gap_valid = bool(gap_analysis and ("novelty_flag" in gap_analysis or "why_our_work_is_unique" in gap_analysis))
+        checks.append(("Gap analysis evaluates topic novelty & uniqueness vs literature", gap_valid))
 
         # Check 3: Draft sections match outline structure
         sections = ctx.get("draft_sections", {})

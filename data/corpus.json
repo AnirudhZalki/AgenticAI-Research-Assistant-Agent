@@ -1,52 +1,122 @@
 [
     {
         "id": "C001",
-        "title": "Edge AI Hardware Porting Frameworks: A Survey",
-        "authors": ["A. Sharma", "B. Patel"],
+        "title": "Edge AI Hardware Porting Frameworks: A Comprehensive Survey",
+        "authors": ["A. Sharma", "B. Patel", "R. Iyer"],
         "year": 2024,
         "venue": "IEEE Transactions on Edge Computing",
-        "abstract": "We review lightweight compilation and quantisation pipelines for porting Deep Learning models to resource-constrained microcontrollers.",
+        "abstract": "We review lightweight compilation, operator fusion, and 8-bit quantisation pipelines for porting Deep Learning models to resource-constrained microcontrollers.",
         "keywords": ["edge AI", "hardware porting", "microcontrollers", "quantisation", "embedded"],
         "doi": "10.1109/TEDG.2024.1001"
     },
     {
         "id": "C002",
-        "title": "Machine Learning in Healthcare Diagnostics",
-        "authors": ["C. Zhang", "D. Kumar"],
+        "title": "Machine Learning in Healthcare Diagnostics & Clinical Prediction",
+        "authors": ["C. Zhang", "D. Kumar", "M. Takahashi"],
         "year": 2023,
         "venue": "ACM Journal of Healthcare Informatics",
-        "abstract": "A comprehensive study on transformer architectures applied to medical imaging and clinical diagnostic prediction.",
+        "abstract": "A comprehensive study on vision transformer architectures applied to medical imaging, pathology classification, and diagnostic outcome prediction.",
         "keywords": ["machine learning", "healthcare", "diagnostics", "transformers", "imaging"],
         "doi": "10.1145/ACMHI.2023.2002"
     },
     {
         "id": "C003",
-        "title": "Ethics and Auditing in Medical Artificial Intelligence",
-        "authors": ["E. R. Miller", "F. Gupta"],
+        "title": "Ethics, Explainability, and Auditing in Medical Artificial Intelligence",
+        "authors": ["E. R. Miller", "F. Gupta", "S. Al-Mansoor"],
         "year": 2022,
         "venue": "Journal of AI Ethics & Society",
-        "abstract": "Frameworks for bias mitigation, explainability, and regulatory compliance in automated diagnostic decision support systems.",
+        "abstract": "Frameworks for bias mitigation, saliency-map explainability, and regulatory compliance in automated clinical diagnostic decision support systems.",
         "keywords": ["ethics", "medical AI", "bias", "explainability", "governance"],
         "doi": "10.1007/JAIES.2022.3003"
     },
     {
         "id": "C004",
         "title": "Optimizing On-Device Neural Execution on Heterogeneous Microcontrollers",
-        "authors": ["A. Sharma", "K. V. Rao"],
+        "authors": ["A. Sharma", "K. V. Rao", "L. Chen"],
         "year": 2025,
         "venue": "IEEE Micro",
-        "abstract": "Presents runtime execution scheduling and dynamic memory allocation routines for low-power edge TPU acceleration.",
-        "keywords": ["edge AI", "microcontrollers", "heterogeneous compute", "on-device execution"],
+        "abstract": "Presents runtime execution scheduling, DMA memory management, and dynamic scratchpad allocation routines for low-power edge NPU accelerators.",
+        "keywords": ["edge AI", "microcontrollers", "heterogeneous compute", "on-device execution", "hardware porting"],
         "doi": "10.1109/MM.2025.4004"
     },
     {
         "id": "C005",
         "title": "Benchmark Protocols for Edge Acceleration Frameworks",
-        "authors": ["G. Thorne", "H. Zhao"],
+        "authors": ["G. Thorne", "H. Zhao", "P. Nowak"],
         "year": 2023,
         "venue": "IEEE Embedded Systems Letters",
-        "abstract": "Establishes standardized benchmark metrics for measuring latency, peak SRAM usage, and power draw across edge inference runtimes.",
+        "abstract": "Establishes standardized benchmark metrics for measuring inference latency, peak SRAM usage, thermal throttling, and energy per operation.",
         "keywords": ["edge AI", "benchmarking", "hardware porting", "latency", "SRAM"],
         "doi": "10.1109/LEMB.2023.5005"
+    },
+    {
+        "id": "C006",
+        "title": "Automated Model Compression & Hardware-Aware Neural Search",
+        "authors": ["J. Vance", "W. Kim", "A. Sharma"],
+        "year": 2024,
+        "venue": "ACM Transactions on Embedded Computing",
+        "abstract": "Explores mixed-precision NAS algorithms targeting ARM Cortex-M microcontrollers with sub-millisecond execution constraints.",
+        "keywords": ["edge AI", "hardware porting", "NAS", "compression", "microcontrollers"],
+        "doi": "10.1145/TECS.2024.6006"
+    },
+    {
+        "id": "C007",
+        "title": "Privacy-Preserving Federated Learning for Multi-Hospital Healthcare Systems",
+        "authors": ["H. Tanaka", "E. Smith", "R. Gupta"],
+        "year": 2024,
+        "venue": "IEEE Journal of Biomedical & Health Informatics",
+        "abstract": "Proposes differential privacy mechanisms and secure aggregation protocols for collaborative training of medical diagnostic models across hospitals.",
+        "keywords": ["federated learning", "healthcare", "privacy", "medical AI", "diagnostics"],
+        "doi": "10.1109/JBHI.2024.7007"
+    },
+    {
+        "id": "C008",
+        "title": "Communication-Efficient Federated Optimization in Heterogeneous Networks",
+        "authors": ["L. Martinez", "K. Watanabe", "J. Lee"],
+        "year": 2023,
+        "venue": "NeurIPS Proceedings",
+        "abstract": "Presents gradient compression and adaptive client sampling methods to accelerate federated learning convergence under non-IID data distributions.",
+        "keywords": ["federated learning", "optimization", "distributed AI", "communication"],
+        "doi": "10.5555/NEURIPS.2023.8008"
+    },
+    {
+        "id": "C009",
+        "title": "Quantum Machine Learning Algorithms for High-Dimensional Datasets",
+        "authors": ["V. Petrov", "A. Einstein-Nielsen", "T. Wu"],
+        "year": 2025,
+        "venue": "Physical Review Research: Quantum AI",
+        "abstract": "Evaluates parameterized quantum circuits and quantum kernels for classification tasks on NISQ-era quantum processors.",
+        "keywords": ["quantum machine learning", "quantum computing", "QML", "NISQ", "algorithms"],
+        "doi": "10.1103/PRXQuantum.2025.9009"
+    },
+    {
+        "id": "C010",
+        "title": "Hybrid Quantum-Classical Neural Networks for Signal Processing",
+        "authors": ["M. O'Connor", "S. Bhattacharya"],
+        "year": 2024,
+        "venue": "IEEE Transactions on Quantum Engineering",
+        "abstract": "Designs variational quantum eigensolver layers coupled with classical CNN backbones for complex physical signal analysis.",
+        "keywords": ["quantum machine learning", "QML", "hybrid quantum", "signal processing"],
+        "doi": "10.1109/TQE.2024.1010"
+    },
+    {
+        "id": "C011",
+        "title": "Real-Time Sensor Fusion & Perception in Autonomous Driving",
+        "authors": ["R. Hoffman", "Y. Takahashi", "N. Patel"],
+        "year": 2024,
+        "venue": "IEEE Transactions on Intelligent Transportation Systems",
+        "abstract": "Integrates LiDAR point clouds and HD camera feeds using spatial-temporal attention mechanisms for robust object detection in adverse weather.",
+        "keywords": ["autonomous vehicles", "perception", "sensor fusion", "LiDAR", "computer vision"],
+        "doi": "10.1109/TITS.2024.1111"
+    },
+    {
+        "id": "C012",
+        "title": "Adversarial Robustness & Intrusion Detection in Edge IoT Networks",
+        "authors": ["D. Al-Hassan", "P. Schneider"],
+        "year": 2023,
+        "venue": "ACM Computing Surveys: Cybersecurity",
+        "abstract": "Analyzes adversarial perturbation attacks against lightweight intrusion detection classifiers deployed on industrial IoT gateways.",
+        "keywords": ["cybersecurity", "IoT", "intrusion detection", "adversarial ML", "edge security"],
+        "doi": "10.1145/CSUR.2023.1212"
     }
 ]

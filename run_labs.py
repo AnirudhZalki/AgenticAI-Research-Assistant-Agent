@@ -1,17 +1,19 @@
 """
-Automated Test Suite for Labs 1 through 8 (Research Assistant Agent)
-Runs acceptance tests for each lab deliverable and verifies output criteria.
+Automated Test Suite for Labs 1 through 8 (LangChain + OpenClaw + MCP Frameworks)
+Runs acceptance tests for each lab deliverable and verifies output criteria across framework layers.
 """
 
 import sys
+import json
 import unittest
 from clarify import RequestClarifier
 from search import SearchTools
 from skills import ResearchPlanSkill, FormattingSkill
 from memory import MemoryStore
 from connector import ResearchDataConnector
-from runtime import AgentRuntime
-from specialist_agents import LiteratureDiscoveryAgent, GapAnalysisAgent, CitationComplianceAgent
+from mcp_server import MCPServer
+from openclaw_runtime import OpenClawAgentRuntime
+from langchain_orchestrator import LangChainOrchestrator
 from node_graph import ResearchNodeGraph
 from swarm import ParallelSwarm
 from verify import ValidationAgent
@@ -68,29 +70,35 @@ class TestResearchAgentLabs(unittest.TestCase):
         self.assertEqual(len(sim_hits), 1)
         print("  [PASS] Lab 4: Memory store cleanly manages session state and retrieval.")
 
-    def test_lab_5_mcp_connector(self):
-        """Lab 5: Exposes data sources through one governed connector with audit logging."""
-        connector = ResearchDataConnector()
-        papers = connector.read_paper_corpus("edge", agent_id="TestAgent")
-        deadlines = connector.read_funding_deadlines("edge", agent_id="TestAgent")
+    def test_lab_5_mcp_server_connector(self):
+        """Lab 5: Model Context Protocol (MCP) Server exposes data tools according to MCP standard."""
+        mcp_server = MCPServer()
+        tools = mcp_server.list_tools()
+        self.assertGreaterEqual(len(tools), 4)
         
-        trail = connector.get_audit_trail()
-        self.assertGreaterEqual(len(trail), 2)
+        res = mcp_server.call_tool("read_paper_corpus", {"keyword": "edge"}, agent_id="TestAgent")
+        papers = json.loads(res[0].text)
+        self.assertIsInstance(papers, list)
+        self.assertGreater(len(papers), 0)
+        
+        trail = mcp_server.connector.get_audit_trail()
+        self.assertGreaterEqual(len(trail), 1)
         self.assertEqual(trail[0]["agent_id"], "TestAgent")
-        print("  [PASS] Lab 5: Governed MCP data connector handles requests with audit logging.")
+        print("  [PASS] Lab 5: Governed MCP Tool Server executes protocol tool requests.")
 
-    def test_lab_6_governed_runtime(self):
-        """Lab 6: Governed runtime with step logging, budgets, and state checkpointing."""
-        runtime = AgentRuntime(max_budget_steps=10)
+    def test_lab_6_openclaw_runtime(self):
+        """Lab 6: OpenClaw Agent Runtime with step audit logging, budget limits, and checkpoints."""
+        runtime = OpenClawAgentRuntime(max_budget_steps=10)
         runtime.log_audit_step("Test Step", "Action", "Result OK")
         runtime.checkpoint()
         
         self.assertTrue(runtime.resume_from_checkpoint())
         self.assertEqual(len(runtime.audit_log), 1)
-        print("  [PASS] Lab 6: Runtime logs steps, saves checkpoints, and restores state.")
+        self.assertIn("OpenClaw", runtime.state["runtime_engine"])
+        print("  [PASS] Lab 6: OpenClaw Runtime logs steps, saves checkpoints, and restores state.")
 
-    def test_lab_7_agentic_node_graph(self):
-        """Lab 7: Specialist agents wired into an executable node graph with validation & human gate."""
+    def test_lab_7_langchain_agentic_node_graph(self):
+        """Lab 7: LangChain Runnable Sequence wired into OpenClaw Runtime node graph."""
         graph = ResearchNodeGraph()
         req = {
             "topic": "edge AI hardware porting frameworks",
@@ -101,10 +109,10 @@ class TestResearchAgentLabs(unittest.TestCase):
         res = graph.run_graph(req, auto_approve_gate=True)
         self.assertIn("formatted_paper", res)
         self.assertEqual(res.get("export_status"), "READY_FOR_PUBLICATION")
-        print("  [PASS] Lab 7: Agentic node graph executes end-to-end specialist pipeline.")
+        print("  [PASS] Lab 7: LangChain + OpenClaw agentic node graph executes end-to-end pipeline.")
 
-    def test_lab_8_parallel_swarm(self):
-        """Lab 8: Parallel Swarm fan-out workers and plan-aligned fan-in merge."""
+    def test_lab_8_parallel_swarm_mcp(self):
+        """Lab 8: Parallel Swarm fan-out workers using MCP Tool Server."""
         swarm = ParallelSwarm()
         subqueries = ["edge AI", "microcontroller", "benchmarking"]
         merged = swarm.run_swarm(subqueries, main_topic="edge AI hardware porting")
@@ -112,11 +120,11 @@ class TestResearchAgentLabs(unittest.TestCase):
         self.assertEqual(merged["total_workers_executed"], 3)
         self.assertGreater(merged["total_unique_papers"], 0)
         self.assertIn("consolidated_papers", merged)
-        print("  [PASS] Lab 8: Parallel Swarm fan-out and fan-in merge completed.")
+        print("  [PASS] Lab 8: Parallel Swarm fan-out via MCP tools and fan-in merge completed.")
 
 def run_all_tests():
     print("==========================================================================")
-    print("          RUNNING AUTOMATED VERIFICATION SUITE (LABS 1 - 8)               ")
+    print("      AUTOMATED VERIFICATION SUITE (LANGCHAIN + OPENCLAW + MCP LABS 1 - 8)")
     print("==========================================================================\n")
     suite = unittest.TestLoader().loadTestsFromTestCase(TestResearchAgentLabs)
     runner = unittest.TextTestRunner(verbosity=2)
