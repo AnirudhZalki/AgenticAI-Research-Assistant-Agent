@@ -88,8 +88,8 @@ AgenticAI-Research-Assistant-Agent/
 
 ### Option 0: Streamlit Web Interface (recommended)
 ```bash
-pip install -r requirements.txt
-streamlit run app.py
+python -m pip install -r requirements.txt
+python -m streamlit run app.py
 ```
 Guided workflow: **Clarify (Lab 1) → Plan (Lab 3) → Discover swarm (Lab 8) → Pipeline (Lab 7) → Faculty approval & export (Lab 6)**, plus inspection tabs for typed tools (Lab 2), memory (Lab 4), the MCP server and audit trail (Lab 5), and the OpenClaw runtime audit log/checkpoints (Lab 6). The sidebar toggle switches between the offline local corpus and live academic APIs.
 

@@ -12,12 +12,24 @@ Stages (each one maps to a lab):
   Inspect tabs: Lab 2 typed tools, Lab 4 memory, Lab 5 MCP connector, Lab 6 runtime audit.
 """
 
+import importlib.util
 import json
-import os
-import time
+import sys
+
+import streamlit as st
+
+# Preflight: give a clear fix instead of a raw ImportError traceback.
+_DEPS = {"langchain_core": "langchain-core", "mcp": "mcp", "openclaw": "openclaw", "pandas": "pandas"}
+_missing = [pkg for mod, pkg in _DEPS.items() if importlib.util.find_spec(mod) is None]
+if _missing:
+    st.set_page_config(page_title="Research Assistant Agent", page_icon="🔬")
+    st.error(f"Missing Python packages: {', '.join(_missing)}")
+    st.write("Install them into the **same Python that runs Streamlit**, then restart the app:")
+    st.code(f'"{sys.executable}" -m pip install -r requirements.txt', language="bash")
+    st.caption("Start the app with:  python -m streamlit run app.py")
+    st.stop()
 
 import pandas as pd
-import streamlit as st
 
 from clarify import RequestClarifier
 from connector import ResearchDataConnector
