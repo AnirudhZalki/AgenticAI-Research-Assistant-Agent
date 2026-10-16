@@ -7,6 +7,7 @@ Packages repeatable capabilities into schema-typed skills.
 
 from dataclasses import dataclass, field
 from typing import List, Dict, Any
+from domain import parse_venue
 
 @dataclass
 class PlanBlueprint:
@@ -33,23 +34,17 @@ class ResearchPlanSkill:
         else:
             collaborators = collaborators_raw
 
-        sections = [
-            "1. Abstract & Introduction",
-            "2. Literature Review & Discovered Prior Work (5-6 Cited References)",
-            "3. Uniqueness & Novelty Decision (Why Our Work Is Unique)",
-            "4. Proposed Methodology & Architecture",
-            "5. Experimental Setup & Benchmarks",
-            "6. Conclusion & Future Outlook"
-        ]
-        
+        spec = parse_venue(venue)
+        sections = [f"{i}. {name}" for i, name in enumerate(spec.sections, 1)]
+
         bp = PlanBlueprint(
             title=f"A Systematic Investigation into {topic.title()}",
             venue=venue,
             deadline=deadline,
             collaborators=collaborators,
             sections=sections,
-            word_limit=5000 if "journal" in venue.lower() else 3000,
-            citation_style="ACM" if "acm" in venue.lower() else "IEEE",
+            word_limit=spec.word_limit,
+            citation_style=spec.citation_style,
             locked=True
         )
         return bp

@@ -1,289 +1,433 @@
 """
 Lab 7: Specialist Agents Roster (Phase B - Orchestration)
-Implements typed, single-responsibility specialist agents for Chapter 12 Research Assistant Agent.
-1. LiteratureDiscoveryAgent: Fetches REAL papers from live APIs (Semantic Scholar/CrossRef/OpenAlex),
-   falls back to local corpus, then synthesizes — always returns 5-6 ranked references.
-2. GapAnalysisAgent: Analyzes literature and explicitly decides HOW OUR WORK IS UNIQUE (Uniqueness & Novelty Decision).
-3. DraftingWritingAgent: Produces outline and full structured draft incorporating 5-6 references and uniqueness analysis.
-4. CitationComplianceAgent: Checks citation integrity, format rules, and self-citations.
-5. FundingRadarAgent: Tracks upcoming journal calls and grant deadlines.
-6. CollaborationAgent: Consolidates co-author section ownership and edits.
-7. ExportRepositoryAgent: Formats approved draft and logs version control archive.
+Typed, single-responsibility agents that follow the proposal's guardrails:
+
+  * never fabricate a citation, abstract or result  (no synthesized papers; no invented numbers)
+  * state uncertainty about novelty instead of asserting it
+  * mark AI-drafted text clearly; leave results/methods for the authors to complete
+  * flag missing/inconsistent citations instead of inventing them
+  * timestamp radar alerts; preserve co-author attribution (never overwrite silently)
+  * keep version history with source links
+
+Agents: LiteratureDiscovery, GapAnalysis, DraftingWriting, CitationCompliance, FundingRadar,
+Collaboration, ExportRepository.  Each exposes step(ctx, connector) -> ctx.
 """
 
-from typing import Dict, Any, List
+import re
+import time
+from datetime import date, datetime
+from typing import Any, Dict, List
+
 from connector import ResearchDataConnector
+from domain import CitationFormatter, OriginalityChecker, parse_venue
+from tracker import ResearchTracker
+
+AI_TAG = "[AI-DRAFTED - pending faculty review]"
+_STOP = set("a an and are as at be by for from in into is it of on or the to with using use via based "
+            "towards toward their its this that these those over under study approach method".split())
 
 
+def terms(text: str) -> List[str]:
+    """Lower-cased content words (len > 2, no stop words), order-preserving and de-duplicated."""
+    seen, out = set(), []
+    for w in re.findall(r"[a-z0-9][a-z0-9\-]+", (text or "").lower()):
+        if len(w) > 2 and w not in _STOP and w not in seen:
+            seen.add(w)
+            out.append(w)
+    return out
+
+
+def _paper_text(p: Dict[str, Any]) -> str:
+    return f"{p.get('title', '')} {p.get('abstract', '')} {' '.join(p.get('keywords', []) or [])}".lower()
+
+
+def relevance(topic: str, paper: Dict[str, Any]) -> float:
+    """Fraction of topic terms that appear in the paper's title/abstract/keywords (prefix match covers plurals)."""
+    t = terms(topic)
+    if not t:
+        return 0.0
+    text = _paper_text(paper)
+    words = set(re.findall(r"[a-z0-9\-]+", text))
+    hit = sum(1 for w in t if w in words or any(x.startswith(w[:max(4, len(w) - 2)]) for x in words))
+    return round(hit / len(t), 3)
+
+
+def first_sentence(text: str, limit: int = 240) -> str:
+    s = re.split(r"(?<=[.!?])\s", (text or "").strip())[0]
+    return s if len(s) <= limit else s[:limit].rsplit(" ", 1)[0] + "..."
+
+
+# ---------------------------------------------------------------------------------------------------------------------
 class LiteratureDiscoveryAgent:
-    """Agent 1: Fetches REAL scholarly papers from live APIs (Semantic Scholar/CrossRef/OpenAlex),
-    then ranks and returns 5-6 references with full metadata for the chosen topic."""
+    """Agent 1: ranked reading list from scholarly sources (live APIs when available, else the local corpus)."""
+
+    target_count = 6
 
     def step(self, ctx: Dict[str, Any], connector: ResearchDataConnector) -> Dict[str, Any]:
         topic = ctx.get("topic", "edge AI hardware porting frameworks")
-        target_count = 6
+        warnings: List[str] = []
 
-        # Step 1: Try live academic APIs first (via MCP connector)
-        print(f"    [LiteratureDiscoveryAgent] Querying live academic APIs for: '{topic}'")
-        live_papers = connector.search_online_papers(
-            topic, max_results=target_count, agent_id="LiteratureDiscoveryAgent"
-        )
+        print(f"    [LiteratureDiscoveryAgent] Querying scholarly sources for: '{topic}'")
+        live = connector.search_online_papers(topic, max_results=self.target_count, agent_id="LiteratureDiscoveryAgent")
+        local = connector.read_paper_corpus("", agent_id="LiteratureDiscoveryAgent")
 
-        if live_papers:
-            final_papers = live_papers[:target_count]
-            source_label = live_papers[0].get("source", "Online API")
-            print(f"    [LiteratureDiscoveryAgent] Got {len(final_papers)} papers from {source_label}.")
-        else:
-            # Step 2: Fall back to local corpus with keyword scoring
-            print(f"    [LiteratureDiscoveryAgent] Live APIs returned 0 — falling back to local corpus.")
-            words = topic.lower().split()
-            all_corpus = connector.read_paper_corpus("", agent_id="LiteratureDiscoveryAgent")
+        pool: Dict[str, Dict[str, Any]] = {}
+        swarm = (ctx.get("swarm_results") or {}).get("consolidated_papers", [])
+        for p in list(live) + list(swarm) + list(local):
+            key = re.sub(r"\W+", " ", (p.get("title") or "").lower()).strip()
+            if key and key not in pool:
+                q = dict(p)
+                q.setdefault("source", "LocalCorpus (mock dataset)")
+                pool[key] = q
+        ranked = sorted(pool.values(), key=lambda p: (relevance(topic, p), p.get("year", 0)), reverse=True)
 
-            scored = []
-            for p in all_corpus:
-                text = (
-                    f"{p.get('title', '')} {p.get('abstract', '')} "
-                    f"{' '.join(p.get('keywords', []))}"
-                ).lower()
-                score = sum(
-                    2 if w in [kw.lower() for kw in p.get("keywords", [])] else (1 if w in text else 0)
-                    for w in words if len(w) > 2
-                )
-                scored.append((score, p))
-
-            scored.sort(key=lambda x: (x[0], x[1].get("year", 0)), reverse=True)
-            matched = [p for score, p in scored if score > 0]
-            final_papers = list(matched)
-
-            # Pad with remaining corpus papers if needed
-            if len(final_papers) < target_count:
-                for score, p in scored:
-                    if p not in final_papers and len(final_papers) < target_count:
-                        final_papers.append(p)
-
-        # Step 3: Synthesize fallback entries if still short
-        synth_id = 1
-        while len(final_papers) < target_count:
-            final_papers.append({
-                "id": f"C_SYNTH_{synth_id}",
-                "title": f"Advanced Techniques in {topic.title()}: Part {synth_id}",
-                "authors": [f"Author {chr(65 + synth_id)}", "Collaborator Team"],
-                "year": 2024 - synth_id,
-                "venue": "IEEE/ACM International Symposium",
-                "abstract": (
-                    f"Investigates performance bottlenecks, scalability, and optimization "
-                    f"strategies in {topic}."
-                ),
-                "doi": f"10.1109/IEEE-ACM.2024.{8000 + synth_id}",
-                "source": "Synthesized",
-            })
-            synth_id += 1
-
-        # Step 4: Format 5-6 references with complete metadata
+        chosen = ranked[: self.target_count]
         summarized = []
-        for idx, p in enumerate(final_papers[:target_count], start=1):
-            authors = p.get("authors", ["Unknown"])
+        for idx, p in enumerate(chosen, start=1):
+            rel = relevance(topic, p)
+            doi = p.get("doi") or "N/A"
             summarized.append({
-                "ref_num": idx,
-                "id": p.get("id", f"REF_{idx}"),
-                "title": p.get("title", "Untitled"),
-                "year": p.get("year", 2024),
-                "venue": p.get("venue", "Unknown Venue"),
-                "authors": authors,
-                "summary": p.get("abstract", "No abstract available."),
-                "doi": p.get("doi", "N/A"),
-                "source": p.get("source", "local"),
+                "ref_num": idx, "id": p.get("id", f"REF_{idx}"), "title": p.get("title", "Untitled"),
+                "year": p.get("year", "n.d."), "venue": p.get("venue", "Unknown Venue"),
+                "authors": p.get("authors") or ["Unknown"],
+                "summary": p.get("abstract") or "No abstract available.",
+                "keywords": p.get("keywords", []), "doi": doi,
+                "source": p["source"], "relevance": rel, "topic_match": rel >= 0.3,
+                "source_link": f"https://doi.org/{doi}" if doi != "N/A" else "",
+                "retrieved_at": time.strftime("%Y-%m-%d %H:%M:%S"),
             })
+
+        on_topic = sum(1 for p in summarized if p["topic_match"])
+        if len(summarized) < self.target_count:
+            warnings.append(f"Only {len(summarized)} papers available (target {self.target_count}); no references were invented.")
+        if on_topic < len(summarized):
+            warnings.append(f"{len(summarized) - on_topic} of {len(summarized)} references are weakly related to the topic "
+                            f"(relevance < 0.30) - review before citing.")
+        if all("mock" in p["source"] for p in summarized):
+            warnings.append("All references come from the local MOCK corpus. Enable live academic APIs for real citations.")
 
         ctx["reading_list"] = summarized
-        print(
-            f"  [LiteratureDiscoveryAgent] Found & ranked {len(summarized)} papers for topic '{topic}'."
-        )
+        ctx["literature_warnings"] = warnings
+        print(f"  [LiteratureDiscoveryAgent] Ranked {len(summarized)} papers ({on_topic} on-topic).")
         return ctx
 
 
+# ---------------------------------------------------------------------------------------------------------------------
 class GapAnalysisAgent:
-    """Agent 2: Compares topic against 5-6 discovered literature papers and explicitly decides HOW OUR WORK IS UNIQUE."""
+    """Agent 2: evidence-based novelty vs overlap, with explicit uncertainty."""
 
     def step(self, ctx: Dict[str, Any], connector: ResearchDataConnector) -> Dict[str, Any]:
         topic = ctx.get("topic", "Research Topic")
-        reading_list = ctx.get("reading_list", [])
+        refs = ctx.get("reading_list", [])
+        t = terms(topic)
 
-        paper_titles = [
-            f"[{p['ref_num']}] \"{p['title']}\" ({p['authors'][0]} et al., {p['year']})"
-            for p in reading_list
-        ]
+        close = [p for p in refs if p["relevance"] >= 0.8]
+        partial = [p for p in refs if 0.4 <= p["relevance"] < 0.8]
+        coverage = {w: sum(1 for p in refs if w in _paper_text(p)) for w in t}
+        thin = [w for w, c in coverage.items() if c <= 1]
+        well = [w for w, c in coverage.items() if c >= max(3, len(refs) // 2)]
 
-        # Formulate explicit Uniqueness & Novelty Decision
-        uniqueness_decision = {
-            "topic": topic,
-            "total_cited_references": len(reading_list),
-            "novelty_flag": "GENUINELY UNDER-EXPLORED AND UNIQUE",
+        if len(close) >= 3:
+            flag, level = "LIKELY WELL-COVERED - needs a sharply differentiated contribution", "LOW"
+        elif close or len(partial) >= 2:
+            flag, level = "PARTIALLY COVERED - novelty must come from a specific angle", "MEDIUM"
+        else:
+            flag, level = "NO CLOSE MATCH FOUND in the sources searched (possible gap - verify manually)", "HIGH"
+
+        library = connector.read_researcher_library(agent_id="GapAnalysisAgent")
+        related_own = [l["title"] for l in library if relevance(topic, l) >= 0.2]
+        angles = []
+        if thin:
+            angles.append(f"Terms covered by at most one retrieved paper (candidate angles): {', '.join(thin)}.")
+        if well:
+            angles.append(f"Heavily covered terms (avoid claiming novelty here): {', '.join(well)}.")
+        if related_own:
+            angles.append(f"Build on your own prior work: {'; '.join(related_own)}.")
+        if not angles:
+            angles.append("No distinguishing angle detected automatically; authors must articulate the contribution.")
+
+        closest = sorted(refs, key=lambda p: p["relevance"], reverse=True)[:3]
+        ctx["gap_analysis"] = {
+            "topic": topic, "total_cited_references": len(refs),
+            "novelty_flag": flag, "novelty_level": level,
+            "closest_prior_work": [f"[{p['ref_num']}] {p['title']} (relevance {p['relevance']})" for p in closest],
+            "term_coverage": coverage,
             "existing_literature_summary": (
-                f"Existing literature (spanning {len(reading_list)} key papers) focuses primarily on individual "
-                f"components such as general model compilation or isolated benchmarks."
-            ),
+                f"{len(close)} close and {len(partial)} partial matches among {len(refs)} retrieved papers."),
             "identified_research_gap": (
-                f"Prior works leave a critical gap: they lack a unified, real-time optimization framework "
-                f"specifically tailored for {topic} under strict SRAM memory bounds and hardware execution constraints."
-            ),
-            "why_our_work_is_unique": [
-                f"1. Novel Unified Architecture: Unlike {paper_titles[0] if paper_titles else 'prior work'}, "
-                f"our work introduces an end-to-end multi-objective optimization pipeline.",
-                f"2. Strict Resource Constraints: We guarantee sub-millisecond execution latency while reducing "
-                f"SRAM memory footprint by up to 45%.",
-                f"3. Empirical Benchmark Validation: We validate on real hardware microcontrollers rather than "
-                f"simulated environments, addressing limitations in prior surveys.",
-            ],
+                f"Under-covered aspects: {', '.join(thin) if thin else 'none detected'}. "
+                f"This is a lexical overlap estimate, not a semantic proof."),
+            "why_our_work_is_unique": angles,
+            "uncertainty": (
+                f"Based only on {len(refs)} retrieved papers from "
+                f"{', '.join(sorted({p['source'] for p in refs})) or 'no source'}. Absence of a match is not proof "
+                f"of novelty; authors must verify with a full literature search."),
             "novelty_positioning_statement": (
-                f"OUR WORK IS UNIQUE because it bridges the gap between theoretical model compression and "
-                f"practical hardware porting for {topic}, delivering provable latency bounds with full citation grounding."
-            ),
+                f"Preliminary assessment ({level} novelty confidence): {flag}."),
+            "novelty_summary": (
+                f"This draft investigates {topic}. Preliminary novelty assessment against {len(refs)} retrieved papers: "
+                f"{flag}. Authors must confirm novelty claims."),
         }
-
-        ctx["gap_analysis"] = uniqueness_decision
-        print(
-            f"  [GapAnalysisAgent] Evaluated novelty: {uniqueness_decision['novelty_flag']}"
-        )
+        print(f"  [GapAnalysisAgent] Novelty: {flag}")
         return ctx
 
 
+# ---------------------------------------------------------------------------------------------------------------------
 class DraftingWritingAgent:
-    """Agent 3: Produces outline and full structured draft with 5-6 references and Uniqueness analysis."""
+    """Agent 3: outline first, then a draft that only states what the retrieved evidence supports."""
+
+    def make_outline(self, ctx: Dict[str, Any]) -> List[str]:
+        if ctx.get("confirmed_outline"):
+            return list(ctx["confirmed_outline"])
+        if ctx.get("plan_sections"):
+            return list(ctx["plan_sections"])
+        spec = parse_venue(ctx.get("venue", ""))
+        return [f"{i}. {s}" for i, s in enumerate(spec.sections, 1)]
+
+    @staticmethod
+    def _kind(title: str) -> str:
+        t = title.lower()
+        for kind, keys in (("lit", ("literature", "related", "background", "prior", "taxonomy")),
+                           ("unique", ("unique", "novel", "gap", "challenge", "differentiat")),
+                           ("intro", ("abstract", "introduction", "summary", "motivation")),
+                           ("method", ("method", "architecture", "approach", "work plan", "objective")),
+                           ("experiment", ("experiment", "result", "evaluat", "benchmark", "outcome", "budget")),
+                           ("conclusion", ("conclusion", "future", "discussion"))):
+            if any(k in t for k in keys):
+                return kind
+        return "generic"
 
     def step(self, ctx: Dict[str, Any], connector: ResearchDataConnector) -> Dict[str, Any]:
         topic = ctx.get("topic", "Research Topic")
         venue = ctx.get("venue", "IEEE Conference")
-        reading_list = ctx.get("reading_list", [])
-        gap_analysis = ctx.get("gap_analysis", {})
+        refs = ctx.get("reading_list", [])
+        gap = ctx.get("gap_analysis", {})
+        outline = self.make_outline(ctx)
 
-        outline = [
-            "1. Abstract & Introduction",
-            "2. Literature Review & Discovered Prior Work (5-6 Cited References)",
-            "3. Uniqueness & Novelty Decision (Why Our Work Is Unique)",
-            "4. Proposed Methodology & Architecture",
-            "5. Experimental Benchmarks & Evaluation",
-            "6. Conclusion & Future Outlook",
-        ]
+        lit_lines = [f"{AI_TAG}", f"The retrieved literature on {topic} comprises {len(refs)} papers:"]
+        for p in refs:
+            lit_lines.append(
+                f"  - [{p['ref_num']}] {', '.join(p['authors'][:3])}{' et al.' if len(p['authors']) > 3 else ''} "
+                f"({p['year']}), \"{p['title']}\", {p['venue']}. DOI: {p['doi']} [Source: {p['source']}]\n"
+                f"    Summary: {first_sentence(p['summary'])}")
+        lit_text = "\n".join(lit_lines)
 
-        # Build Literature Review text incorporating all 5-6 references
-        lit_review_paragraphs = [
-            f"We conducted a systematic literature review discovering {len(reading_list)} "
-            f"foundational papers in this domain:\n"
-        ]
-        for p in reading_list:
-            authors_str = ", ".join(p["authors"])
-            src = p.get("source", "local")
-            lit_review_paragraphs.append(
-                f"  - [{p['ref_num']}] {authors_str}, \"{p['title']}\", "
-                f"{p['venue']} ({p['year']}). DOI: {p['doi']} [Source: {src}]\n"
-                f"    Summary: {p['summary']}\n"
-            )
+        unique_text = (f"{AI_TAG}\nPRELIMINARY NOVELTY ASSESSMENT: {gap.get('novelty_flag', 'n/a')}\n"
+                       f"Closest prior work: {'; '.join(gap.get('closest_prior_work', [])) or 'none'}\n"
+                       f"Candidate angles:\n" + "\n".join(f"  - {a}" for a in gap.get("why_our_work_is_unique", []))
+                       + f"\nUNCERTAINTY: {gap.get('uncertainty', '')}")
 
-        lit_review_text = "\n".join(lit_review_paragraphs)
-
-        # Build Uniqueness section text
-        unique_points = "\n".join(gap_analysis.get("why_our_work_is_unique", []))
-        uniqueness_text = (
-            f"IDENTIFIED RESEARCH GAP:\n{gap_analysis.get('identified_research_gap', '')}\n\n"
-            f"HOW OUR WORK IS UNIQUE:\n{unique_points}\n\n"
-            f"UNIQUENESS POSITIONING:\n{gap_analysis.get('novelty_positioning_statement', '')}"
-        )
-
-        sections = {
-            "1. Abstract & Introduction": (
-                f"This paper presents our research on '{topic}' formatted for {venue}. "
-                f"Recent advances demand disciplined evaluation and clear novelty."
-            ),
-            "2. Literature Review & Discovered Prior Work": lit_review_text,
-            "3. Uniqueness & Novelty Decision (Why Our Work Is Unique)": uniqueness_text,
-            "4. Proposed Methodology & Architecture": (
-                f"Our proposed architecture solves the identified gaps by combining hardware-aware search "
-                f"with real-time execution scheduling for {topic}."
-            ),
-            "5. Experimental Benchmarks & Evaluation": (
-                f"We evaluate our framework against all {len(reading_list)} cited benchmark baselines, "
-                f"demonstrating superior efficiency."
-            ),
-            "6. Conclusion & Future Outlook": (
-                f"Our unique framework advances the state-of-the-art for {topic} "
-                f"with faculty-approved submission compliance."
-            ),
+        builders = {
+            "intro": lambda: (f"{AI_TAG}\nThis work addresses {topic}, targeting {venue}. "
+                              f"Preliminary novelty assessment: {gap.get('novelty_flag', 'n/a')}. "
+                              f"Contributions must be stated by the authors."),
+            "lit": lambda: lit_text,
+            "unique": lambda: unique_text,
+            "method": lambda: (f"{AI_TAG}\n[AUTHORS TO COMPLETE: describe the proposed method/architecture for {topic}. "
+                               f"The assistant does not invent design details.]"),
+            "experiment": lambda: (f"{AI_TAG}\n[AUTHORS TO COMPLETE: experimental setup, baselines drawn from "
+                                   f"{', '.join('[' + str(p['ref_num']) + ']' for p in refs[:4])}, metrics and measured results. "
+                                   f"No results are claimed by the assistant.]"),
+            "conclusion": lambda: (f"{AI_TAG}\n[AUTHORS TO COMPLETE: summarize validated findings and future work on "
+                                   f"{topic} once results exist.]"),
+            "generic": lambda: f"{AI_TAG}\n[AUTHORS TO COMPLETE: content for this section on {topic}.]",
         }
+        sections = {title: builders[self._kind(title)]() for title in outline}
+
+        # Reference completeness: every reference must be cited at least once in the text.
+        cited = {int(n) for body in sections.values() for n in re.findall(r"\[(\d+)\]", body)}
+        missing = [p["ref_num"] for p in refs if p["ref_num"] not in cited]
+        if missing and sections:
+            first = next((t for t in outline if self._kind(t) in ("intro", "lit")), outline[0])
+            sections[first] += "\nAdditional references considered: " + ", ".join(f"[{n}]" for n in missing) + "."
 
         ctx["outline"] = outline
         ctx["draft_sections"] = sections
-        ctx["references"] = reading_list
-        print(
-            f"  [DraftingWritingAgent] Produced draft with {len(sections)} sections and {len(reading_list)} references."
-        )
+        ctx["references"] = refs
+        print(f"  [DraftingWritingAgent] Drafted {len(sections)} sections citing {len(refs)} references.")
         return ctx
 
 
+# ---------------------------------------------------------------------------------------------------------------------
 class CitationComplianceAgent:
-    """Agent 4: Checks formatting, reference completeness, and venue-specific requirements for all 5-6 references."""
+    """Agent 4: reference completeness, in-text consistency, venue style/limits, originality screening."""
 
     def step(self, ctx: Dict[str, Any], connector: ResearchDataConnector) -> Dict[str, Any]:
-        references = ctx.get("references", [])
-        prior_library = connector.read_researcher_library(agent_id="CitationComplianceAgent")
+        refs = ctx.get("references", ctx.get("reading_list", []))
+        sections = ctx.get("draft_sections", {})
+        spec = parse_venue(ctx.get("venue", ""))
+        library = connector.read_researcher_library(agent_id="CitationComplianceAgent")
+        errors: List[str] = []
+        warnings: List[str] = []
 
-        self_citations = [p for p in prior_library if "Faculty Author" in p.get("authors", [])]
+        seen_titles = set()
+        for p in refs:
+            tag = f"[{p.get('ref_num')}]"
+            for fld in ("title", "authors", "year"):
+                if not p.get(fld) or p.get(fld) in ("Unknown", ["Unknown"]):
+                    errors.append(f"{tag} missing {fld}")
+            if "synth" in str(p.get("source", "")).lower():
+                errors.append(f"{tag} synthesized (unverifiable) reference - remove")
+            if p.get("doi") in (None, "", "N/A"):
+                warnings.append(f"{tag} no DOI - verify it exists")
+            if not p.get("topic_match", True):
+                warnings.append(f"{tag} weakly related to the topic")
+            k = (p.get("title") or "").lower()
+            if k in seen_titles:
+                errors.append(f"{tag} duplicate reference")
+            seen_titles.add(k)
 
-        citation_report = {
-            "total_references": len(references),
-            "missing_dois": [p["id"] for p in references if p.get("doi") == "N/A"],
-            "self_citations_available": len(self_citations),
-            "compliance_passed": len(references) >= 5,
+        full_text = "\n".join(sections.values())
+        cited = {int(n) for n in re.findall(r"\[(\d+)\]", full_text)}
+        listed = {p.get("ref_num") for p in refs}
+        for n in sorted(cited - listed):
+            errors.append(f"in-text citation [{n}] has no reference entry")
+        for n in sorted(listed - cited):
+            warnings.append(f"reference [{n}] is never cited in the text")
+
+        words = len(re.findall(r"\w+", full_text))
+        if words > spec.word_limit:
+            warnings.append(f"draft has {words} words, over the {spec.word_limit}-word limit ({spec.page_limit} pages)")
+
+        formatter = CitationFormatter()
+        formatted = formatter.format_all(refs, spec.citation_style)
+        originality = OriginalityChecker().check(sections, refs + list(library))
+        if originality["flagged_sections"]:
+            warnings.append(f"high text overlap with known sources in: {', '.join(originality['flagged_sections'])}")
+
+        self_cite = [l for l in library if relevance(ctx.get("topic", ""), l) >= 0.2]
+        report = {
+            "total_references": len(refs),
+            "missing_dois": [p["id"] for p in refs if p.get("doi") in (None, "", "N/A")],
+            "self_citations_available": len(library),
+            "suggested_self_citations": [l["title"] for l in self_cite],
+            "citation_style": spec.citation_style, "word_count": words, "word_limit": spec.word_limit,
+            "errors": errors, "warnings": warnings,
+            "formatted_references": formatted, "originality": originality,
+            "compliance_passed": len(refs) >= 5 and not errors,
         }
-        ctx["citation_compliance"] = citation_report
-        print(
-            f"  [CitationComplianceAgent] Verified {len(references)} citations: "
-            f"Passed={citation_report['compliance_passed']}"
-        )
+        ctx["citation_compliance"] = report
+        ctx["formatted_references"] = formatted
+        print(f"  [CitationComplianceAgent] {len(errors)} errors, {len(warnings)} warnings: Passed={report['compliance_passed']}")
         return ctx
 
 
+# ---------------------------------------------------------------------------------------------------------------------
 class FundingRadarAgent:
-    """Agent 5: Continuously surfaces relevant journals, calls for papers, and funding deadlines."""
+    """Agent 5: timestamped, topic-ranked journal/CFP/grant deadlines."""
 
     def step(self, ctx: Dict[str, Any], connector: ResearchDataConnector) -> Dict[str, Any]:
         topic = ctx.get("topic", "")
-        words = topic.split() if topic else [""]
-        deadlines = []
+        tset = set(terms(topic))
+        alerts: Dict[str, Dict[str, Any]] = {}
+        for w in tset:
+            for d in connector.read_funding_deadlines(w, agent_id="FundingRadarAgent"):
+                alerts.setdefault(d["id"], dict(d))
+        matched = bool(alerts)
+        if not alerts:
+            for d in connector.read_funding_deadlines("", agent_id="FundingRadarAgent-Fallback"):
+                alerts[d["id"]] = dict(d)
 
-        for word in words:
-            if len(word) > 2:
-                results = connector.read_funding_deadlines(word, agent_id="FundingRadarAgent")
-                for d in results:
-                    if d not in deadlines:
-                        deadlines.append(d)
-
-        if not deadlines:
-            deadlines = connector.read_funding_deadlines("", agent_id="FundingRadarAgent-Fallback")
-
-        ctx["radar_deadlines"] = deadlines
-        print(f"  [FundingRadarAgent] Surfaced {len(deadlines)} upcoming venue CFPs & grant deadlines.")
+        user_deadline = None
+        try:
+            user_deadline = datetime.strptime(str(ctx.get("deadline", "")), "%Y-%m-%d").date()
+        except ValueError:
+            pass
+        today = date.today()
+        now = time.strftime("%Y-%m-%d %H:%M:%S")
+        out = []
+        for d in alerts.values():
+            try:
+                dd = datetime.strptime(d.get("deadline", ""), "%Y-%m-%d").date()
+                days = (dd - today).days
+            except ValueError:
+                dd, days = None, None
+            overlap = len(tset & set(terms(" ".join(d.get("topics", [])))))
+            d.update({
+                "checked_at": now, "days_remaining": days,
+                "status": "EXPIRED" if days is not None and days < 0 else "UPCOMING",
+                "topic_relevance": overlap if matched else 0,
+                "before_your_deadline": bool(dd and user_deadline and dd <= user_deadline),
+            })
+            out.append(d)
+        out.sort(key=lambda d: (d["status"] == "EXPIRED", d["days_remaining"] if d["days_remaining"] is not None else 9999))
+        ctx["radar_deadlines"] = out
+        print(f"  [FundingRadarAgent] {len(out)} alerts ({'topic-matched' if matched else 'unfiltered fallback'}).")
         return ctx
 
 
+# ---------------------------------------------------------------------------------------------------------------------
 class CollaborationAgent:
-    """Agent 6: Tracks co-author section ownership and consolidates edits into one version."""
+    """Agent 6: section ownership + attributed edits. Never overwrites: conflicts are surfaced to the owner."""
+
+    @staticmethod
+    def _norm(s: str) -> str:
+        return re.sub(r"^\d+\.\s*", "", s).lower().strip()
+
+    def _owner(self, section: str, ownership: Dict[str, str]) -> str:
+        n = set(terms(self._norm(section)))
+        best, score = "", 0
+        for sec, owner in ownership.items():
+            s = len(n & set(terms(self._norm(sec))))
+            if s > score:
+                best, score = owner, s
+        return best
 
     def step(self, ctx: Dict[str, Any], connector: ResearchDataConnector) -> Dict[str, Any]:
-        collab_notes = connector.read_collaboration_notes(agent_id="CollaborationAgent")
-        ctx["collaboration"] = collab_notes
-        print(
-            f"  [CollaborationAgent] Synchronized section ownership for "
-            f"{len(collab_notes.get('section_ownership', {}))} sections."
-        )
+        notes = dict(connector.read_collaboration_notes(agent_id="CollaborationAgent"))
+        ownership = dict(notes.get("section_ownership", {}))
+        edits = list(notes.get("coauthor_edits", [])) + list(ctx.get("coauthor_edits", []))
+        sections = list(ctx.get("draft_sections", {}).keys()) or list(ownership.keys())
+
+        attribution, conflicts, unassigned = [], [], []
+        for sec in sections:
+            owner = self._owner(sec, ownership)
+            sec_edits = [e for e in edits if set(terms(self._norm(e.get("section", "")))) &
+                         set(terms(self._norm(sec)))]
+            authors = {e["author"] for e in sec_edits}
+            status = "OK"
+            if not owner:
+                unassigned.append(sec)
+                status = "UNASSIGNED"
+            if len(authors) > 1:
+                status = "CONFLICT"
+                conflicts.append({"section": sec, "authors": sorted(authors), "action": "owner must reconcile; nothing overwritten"})
+            elif authors and owner and not any(owner.startswith(a) or a.startswith(owner) for a in authors):
+                status = "PENDING_OWNER_CONFIRMATION"
+            attribution.append({"section": sec, "owner": owner or "-", "edits": sec_edits, "status": status})
+
+        notes_out = {}
+        for a in attribution:
+            for e in a["edits"]:
+                notes_out.setdefault(a["section"], []).append(
+                    f"[Edit by {e['author']} - {a['status']}] {e.get('note', '')}")
+        ctx["collab_annotations"] = notes_out
+        ctx["collaboration"] = {
+            "collaborators": notes.get("collaborators", []),
+            "section_ownership": ownership, "attribution": attribution,
+            "conflicts": conflicts, "unassigned_sections": unassigned,
+            "policy": "Edits are attributed and kept alongside the draft; no co-author text is silently overwritten.",
+        }
+        print(f"  [CollaborationAgent] {len(attribution)} sections tracked, {len(conflicts)} conflicts, "
+              f"{len(unassigned)} unassigned.")
         return ctx
 
 
+# ---------------------------------------------------------------------------------------------------------------------
 class ExportRepositoryAgent:
-    """Agent 7: Produces final formatted document and logs it in the research tracker."""
+    """Agent 7: logs the approved document into the research tracker with version history and source links."""
+
+    def __init__(self, tracker: ResearchTracker = None):
+        self.tracker = tracker if tracker is not None else ResearchTracker()
 
     def step(self, ctx: Dict[str, Any], connector: ResearchDataConnector) -> Dict[str, Any]:
+        entry = self.tracker.log_version(
+            ctx.get("topic", ""), ctx.get("venue", ""), ctx.get("formatted_paper", ""),
+            ctx.get("references", ctx.get("reading_list", [])),
+            status="APPROVED", approved_by=ctx.get("approved_by", "Faculty Examiner"),
+            note="Exported after faculty approval")
         ctx["export_status"] = "READY_FOR_PUBLICATION"
-        ctx["version"] = "v1.0-approved"
-        print(f"  [ExportRepositoryAgent] Archived draft as {ctx['version']}.")
+        ctx["version"] = entry["version"]
+        ctx["tracker_entry"] = {k: v for k, v in entry.items() if k != "text"}
+        print(f"  [ExportRepositoryAgent] Archived draft as {entry['version']} (sha256 {entry['sha256'][:10]}...).")
         return ctx
