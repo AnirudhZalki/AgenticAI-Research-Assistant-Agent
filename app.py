@@ -1,15 +1,15 @@
 """
-Research Assistant Agent - Streamlit Interface (Labs 1 through 8)
+Research Assistant Agent - Streamlit Interface (Labs 1 through 14)
 
-Run with:  streamlit run app.py
+Run with:  python -m streamlit run app.py
 
-Stages (each one maps to a lab):
-  1. Clarify   (Lab 1)  - RequestClarifier parameters, missing-field detection
-  2. Plan      (Lab 1/3) - ResearchPlanSkill blueprint, revise sections, lock
-  3. Discover  (Lab 8)  - parallel swarm fan-out / fan-in over MCP tools
-  4. Pipeline  (Lab 7)  - LangChain runnable sequence + validation gate + bounded retry
-  5. Review    (Lab 6)  - OpenClaw human approval gate, export, checkpoint
-  Inspect tabs: Lab 2 typed tools, Lab 4 memory, Lab 5 MCP connector, Lab 6 runtime audit.
+Guided workflow (Workflow tab):
+  1 Intake (Gate 1, Lab 1) -> 2 Plan & outline (Lab 3) -> 3 Discover (Labs 8/9, parallel literature || radar)
+  -> 4 Draft & checks (Labs 7/13, parallel citation || collaboration, validation gate)
+  -> 5 Faculty review & export (Labs 6/12, approval gate, tracker, rollback)
+
+Inspection tabs: Tools (L2) · Memory (L4) · MCP (L5) · Runtime (L6) · Deep Research (L9) · Ops (L10)
+                 SDLC (L11) · Governance (L12) · Domain (L13) · Capstone demo (L14)
 """
 
 import importlib.util
@@ -31,415 +31,515 @@ if _missing:
 
 import pandas as pd
 
-from clarify import RequestClarifier
-from connector import ResearchDataConnector
-from langchain_orchestrator import LangChainOrchestrator
-from mcp_server import MCPServer
-from memory import MemoryStore
-from openclaw_runtime import OpenClawAgentRuntime
-from search import SearchTools
-from skills import FormattingSkill, ResearchPlanSkill
-from swarm import ParallelSwarm
-from verify import ValidationAgent
+from coordinator import REQUIRED, ResearchCoordinator
+from domain import CitationFormatter, parse_venue
+from governance import RISK_REGISTER, AuditLedger
+from sdlc import SDLCFactory
 
 st.set_page_config(page_title="Research Assistant Agent", page_icon="🔬", layout="wide")
 
-STAGES = ["1 · Clarify", "2 · Plan", "3 · Discover", "4 · Pipeline", "5 · Review"]
-REQUIRED = RequestClarifier().required_fields
-APP_CHECKPOINT = "checkpoint_app.json"  # keep app runs separate from the CLI checkpoint
+STAGES = ["1 · Intake", "2 · Plan & outline", "3 · Discover", "4 · Draft & checks", "5 · Faculty review"]
+DEMO = dict(topic="edge AI hardware porting frameworks", venue="IEEE conference, IMRAD, 6-page limit",
+            collaborators="Faculty Author, Co-Author A", deadline="2026-11-15")
+TRACKER_FILE = "research_tracker.json"
 
 
-# ----------------------------------------------------------------------------
-# Session-state bootstrap
-# ----------------------------------------------------------------------------
-def build_stack(use_live_apis: bool):
-    """Create the tool layer (MCP), memory, runtime (OpenClaw) and orchestrator (LangChain)."""
-    tools = SearchTools()
-    if not use_live_apis:
-        tools.search_online = lambda query, max_results=6: []  # forces local-corpus fallback
-    connector = ResearchDataConnector(tools)
-    mcp = MCPServer(connector)
-    st.session_state.tools = tools
-    st.session_state.connector = connector
-    st.session_state.mcp = mcp
-    st.session_state.memory = MemoryStore(corpus=tools.corpus, library=tools.library)
-    st.session_state.runtime = OpenClawAgentRuntime(checkpoint_file=APP_CHECKPOINT)
-    st.session_state.orchestrator = LangChainOrchestrator(mcp_server=mcp)
-    st.session_state.live = use_live_apis
+def df(rows, **kw):
+    st.dataframe(pd.DataFrame(rows), width="stretch", hide_index=True, **kw)
 
 
-def reset_workflow():
-    for k in ["clarified", "blueprint", "swarm", "ctx", "val_report", "attempts",
-              "gate", "formatted", "final", "params"]:
-        st.session_state.pop(k, None)
+def new_coordinator(live: bool):
+    return ResearchCoordinator(use_live=live, tracker_path=TRACKER_FILE, checkpoint_file="checkpoint_app.json")
+
+
+def reset(live: bool = None):
+    live = st.session_state.get("live", False) if live is None else live
+    st.session_state.live = live
+    st.session_state.coord = new_coordinator(live)
     st.session_state.stage = 0
-    build_stack(st.session_state.get("live", False))
+    for k in ["params", "outline_draft", "drafted", "decision"]:
+        st.session_state.pop(k, None)
 
 
-def init_state():
-    if "tools" not in st.session_state:
-        build_stack(use_live_apis=False)
-        st.session_state.stage = 0
+if "coord" not in st.session_state:
+    reset(False)
+S = st.session_state
+C: ResearchCoordinator = S.coord
 
 
 def go(stage: int):
-    st.session_state.stage = stage
+    S.stage = stage
     st.rerun()
 
 
-init_state()
-S = st.session_state
-
-# ----------------------------------------------------------------------------
+# ----------------------------------------------------------------------------------------------------------------
 # Sidebar
-# ----------------------------------------------------------------------------
+# ----------------------------------------------------------------------------------------------------------------
 with st.sidebar:
     st.title("🔬 Research Assistant")
     st.caption("Agents draft and flag; a named human (Faculty Examiner) approves.")
     live = st.toggle("Use live academic APIs", value=S.live,
-                     help="Semantic Scholar / CrossRef / OpenAlex. Off = local corpus only (fast, offline).")
+                     help="Semantic Scholar / CrossRef / OpenAlex (no API key). Off = local MOCK corpus, fully offline.")
     if live != S.live:
-        build_stack(live)
+        reset(live)
         st.rerun()
-
+    if not S.live:
+        st.warning("Offline mode: references come from a mock dataset and are not citable.", icon="⚠️")
     st.markdown("**Workflow progress**")
     for i, name in enumerate(STAGES):
-        icon = "✅" if i < S.stage else ("▶️" if i == S.stage else "⚪")
-        st.write(f"{icon} {name}")
+        st.write(f"{'✅' if i < S.stage else ('▶️' if i == S.stage else '⚪')} {name}")
     st.progress(min(S.stage, len(STAGES)) / len(STAGES))
-
     st.divider()
-    st.markdown("**Layers**")
-    st.caption("OpenClaw runtime · LangChain orchestration · MCP tool layer")
-    st.metric("Runtime steps", f"{S.runtime.current_step}/{S.runtime.max_budget_steps}")
-    st.metric("MCP calls logged", len(S.connector.get_audit_trail()))
+    st.metric("Runtime steps", f"{C.runtime.current_step}/{C.runtime.max_budget_steps}")
+    st.metric("MCP calls logged", len(C.connector.get_audit_trail()))
+    st.metric("Tracked versions", len(C.tracker.versions))
     if st.button("🔄 Start over", width="stretch"):
-        reset_workflow()
+        reset()
         st.rerun()
 
 st.title("Research Assistant Agent")
-st.caption("Clarify → Plan → Discover → Draft & Validate → Faculty Approval → Export")
+st.caption("Discover → Analyze → Draft → Check → Track · always pausing at faculty review before anything leaves the system")
 
-main_tab, tools_tab, memory_tab, mcp_tab, runtime_tab = st.tabs(
-    ["🧭 Workflow", "🛠 Tools (Lab 2)", "🧠 Memory (Lab 4)", "🔌 MCP (Lab 5)", "⚙️ Runtime (Lab 6)"]
-)
+tabs = st.tabs(["🧭 Workflow", "🛠 Tools L2", "🧠 Memory L4", "🔌 MCP L5", "⚙️ Runtime L6", "📚 Deep research L9",
+                "📡 Ops L10", "🏭 SDLC L11", "🛡 Governance L12", "🎓 Domain L13", "🏁 Capstone L14"])
+(t_flow, t_tools, t_mem, t_mcp, t_rt, t_deep, t_ops, t_sdlc, t_gov, t_dom, t_cap) = tabs
 
-# ----------------------------------------------------------------------------
+# ----------------------------------------------------------------------------------------------------------------
 # Workflow
-# ----------------------------------------------------------------------------
-with main_tab:
+# ----------------------------------------------------------------------------------------------------------------
+with t_flow:
     stage = S.stage
 
-    # ---- Stage 1: Clarify (Lab 1) -------------------------------------------
+    # ---- 1 Intake -------------------------------------------------------------------------------------------
     if stage == 0:
-        st.subheader("Lab 1 · Clarify the research request")
-        st.write("The agent refuses to plan until all four required parameters are supplied.")
-        defaults = S.get("params", {})
-        with st.form("clarify_form"):
-            topic = st.text_input("Research topic / question", defaults.get("topic", ""),
-                                  placeholder="e.g. edge AI hardware porting frameworks")
-            venue = st.text_input("Target venue", defaults.get("venue", ""),
-                                  placeholder="e.g. IEEE Conference, IMRAD, 6-page limit")
-            collaborators = st.text_input("Collaborators (comma separated)", defaults.get("collaborators", ""),
-                                          placeholder="e.g. Faculty Author, Co-Author A")
-            deadline = st.text_input("Submission deadline", defaults.get("deadline", ""),
-                                     placeholder="YYYY-MM-DD")
-            submitted = st.form_submit_button("Clarify request", type="primary")
-        if submitted:
-            S.params = dict(topic=topic, venue=venue, collaborators=collaborators, deadline=deadline)
+        st.subheader("Gate 1 · Confirm intent and venue (Lab 1)")
+        st.write("Nothing starts until topic, venue, collaborators and deadline are all confirmed.")
+        d = S.get("params", {})
+        with st.form("intake"):
+            topic = st.text_input("Research question / topic", d.get("topic", ""), placeholder="edge AI hardware porting frameworks")
+            venue = st.text_input("Target venue", d.get("venue", ""), placeholder="IEEE conference, IMRAD, 6-page limit")
+            collab = st.text_input("Collaborators (comma separated)", d.get("collaborators", ""), placeholder="Faculty Author, Co-Author A")
+            deadline = st.text_input("Deadline (YYYY-MM-DD)", d.get("deadline", ""), placeholder="2026-11-15")
+            ok = st.form_submit_button("Confirm & continue", type="primary")
+        if ok:
+            S.params = dict(topic=topic, venue=venue, collaborators=collab, deadline=deadline)
             missing = [f for f in REQUIRED if not S.params[f].strip()]
             if missing:
                 st.warning("Assistant: I still need → " + ", ".join(f"**{m}**" for m in missing))
             else:
-                clarifier = RequestClarifier()
-                # interactive=False + all fields supplied => no defaults and no input() calls
-                state = clarifier.clarify(initial_inputs=S.params, interactive=False)
-                S.clarified = state
-                S.memory.update_session("clarified_state", state)
-                S.runtime.log_audit_step("Clarify", "RequestClarifier", state)
-                go(1)
+                try:
+                    C.intake(S.params)
+                    C.plan()
+                    S.outline_draft = list(C.blueprint.sections)
+                    go(1)
+                except ValueError as exc:
+                    st.error(str(exc))
         if st.button("Fill with demo values"):
-            S.params = dict(topic="edge AI hardware porting frameworks",
-                            venue="IEEE conference, IMRAD, 6-page limit",
-                            collaborators="Faculty Author, Co-Author A", deadline="2026-11-15")
+            S.params = dict(DEMO)
             st.rerun()
+        if d.get("venue"):
+            spec = parse_venue(d["venue"])
+            st.caption(f"Parsed venue → style **{spec.citation_style}**, structure **{spec.structure}**, "
+                       f"{spec.page_limit} pages ≈ {spec.word_limit} words")
 
-    # ---- Stage 2: Plan (Lab 1 revise loop + Lab 3 skill) ---------------------
+    # ---- 2 Plan & outline ------------------------------------------------------------------------------------
     elif stage == 1:
-        st.subheader("Lab 3 · Research plan blueprint (revise, then lock)")
-        if "blueprint" not in S:
-            S.blueprint = ResearchPlanSkill().execute(S.clarified)
-        bp = S.blueprint
-        c1, c2 = st.columns([2, 1])
-        with c1:
-            st.markdown(f"**Title:** {bp.title}")
-            st.markdown(f"**Venue:** {bp.venue}  ·  **Citation style:** {bp.citation_style}")
-            st.markdown(f"**Deadline:** {bp.deadline}  ·  **Word limit:** {bp.word_limit}")
-            st.markdown(f"**Collaborators:** {', '.join(bp.collaborators)}")
-        with c2:
-            st.info("Blueprint is generated by `ResearchPlanSkill`. Revise the outline below; "
-                    "approving locks it.")
-        st.markdown("**Sections**")
-        for i, sec in enumerate(bp.sections):
-            col_a, col_b = st.columns([10, 1])
-            col_a.write(sec)
-            if col_b.button("✖", key=f"rm_{i}", help="Remove section"):
-                bp.sections.pop(i)
-                st.rerun()
-        with st.form("add_section", clear_on_submit=True):
-            new_sec = st.text_input("Revise plan: add a section")
-            if st.form_submit_button("Add section") and new_sec.strip():
-                bp.sections.append(f"{len(bp.sections) + 1}. {new_sec.strip()}")
-                st.rerun()
-        if st.button("✅ Approve & lock plan", type="primary"):
-            bp.locked = True
-            S.memory.update_session("active_plan", bp)
-            S.runtime.log_audit_step("Plan", "ResearchPlanSkill locked", bp.title)
+        st.subheader("Plan & outline-first (Lab 3)")
+        bp = C.blueprint
+        if C.ctx.get("prior_tasks"):
+            st.info(f"Similar earlier task found in memory: {C.ctx['prior_tasks']}")
+        st.markdown(f"**{bp.title}**  \n{bp.venue} · **{bp.citation_style}** · ≤ {bp.word_limit} words · due {bp.deadline}  \n"
+                    f"Collaborators: {', '.join(bp.collaborators)}")
+        st.markdown("**Outline** — edit it; the draft is only written after you confirm it.")
+        ol = S.outline_draft
+        for i, sec in enumerate(list(ol)):
+            c1, c2, c3, c4 = st.columns([12, 1, 1, 1])
+            c1.write(sec)
+            if c2.button("↑", key=f"up{i}", disabled=i == 0):
+                ol[i - 1], ol[i] = ol[i], ol[i - 1]; st.rerun()
+            if c3.button("↓", key=f"dn{i}", disabled=i == len(ol) - 1):
+                ol[i + 1], ol[i] = ol[i], ol[i + 1]; st.rerun()
+            if c4.button("✖", key=f"rm{i}"):
+                ol.pop(i); st.rerun()
+        with st.form("add_sec", clear_on_submit=True):
+            new = st.text_input("Add a section")
+            if st.form_submit_button("Add") and new.strip():
+                ol.append(new.strip()); st.rerun()
+        if st.button("✅ Confirm outline", type="primary", disabled=not ol):
+            C.confirm_outline([f"{i}. {s.split('. ', 1)[1] if s.split('.')[0].isdigit() else s}" for i, s in enumerate(ol, 1)])
             go(2)
         if st.button("← Back"):
             go(0)
 
-    # ---- Stage 3: Discover swarm (Lab 8) -------------------------------------
+    # ---- 3 Discover ------------------------------------------------------------------------------------------
     elif stage == 2:
-        st.subheader("Lab 8 · Parallel swarm discovery (fan-out → fan-in)")
-        topic = S.clarified["topic"]
-        default_qs = [topic.split()[0], "hardware porting", "microcontrollers", "benchmarking"]
-        qs_text = st.text_area("Sub-queries (one per line) — each is handled by its own worker",
-                               S.get("subq_text", "\n".join(default_qs)), height=110)
-        S.subq_text = qs_text
-        subqueries = [q.strip() for q in qs_text.splitlines() if q.strip()]
-        if st.button("🚀 Dispatch swarm", type="primary", disabled=not subqueries):
-            with st.spinner(f"Running {len(subqueries)} workers in parallel via MCP tools..."):
-                S.swarm = ParallelSwarm(mcp_server=S.mcp).run_swarm(subqueries, main_topic=topic)
-                S.memory.update_session("swarm_discovery", S.swarm)
-                S.runtime.log_audit_step("Swarm", f"{len(subqueries)} workers", S.swarm["total_unique_papers"])
-        if "swarm" in S:
-            sw = S.swarm
-            m1, m2, m3, m4 = st.columns(4)
-            m1.metric("Workers", sw["total_workers_executed"])
-            m2.metric("Unique papers", sw["total_unique_papers"])
-            m3.metric("Deadlines", sw["total_unique_deadlines"])
-            m4.metric("Wall clock (s)", sw["swarm_wall_clock_time_sec"])
-            best = sw.get("best_aligned_paper")
-            if best:
-                st.success(f"Best-aligned paper: **{best['title']}** ({best.get('year', '')})")
-            if sw["consolidated_papers"]:
-                st.dataframe(pd.DataFrame(sw["consolidated_papers"])[
-                    [c for c in ["id", "title", "year", "venue", "keywords"]
-                     if c in sw["consolidated_papers"][0]]], width="stretch", hide_index=True)
-            else:
-                st.info("No corpus matches for these sub-queries; the pipeline will still discover papers.")
+        st.subheader("Parallel discovery · literature swarm ‖ funding radar (Labs 8, 7)")
+        topic = C.ctx["topic"]
+        default_q = "\n".join([topic] + [w for w in topic.split() if len(w) > 4][:3])
+        qs = st.text_area("Sub-queries (one per line; each runs in its own worker)", S.get("subq", default_q), height=110)
+        S.subq = qs
+        if st.button("🚀 Run discovery", type="primary"):
+            with st.spinner("Swarm workers and the radar are running in parallel..."):
+                C.discover([q.strip() for q in qs.splitlines() if q.strip()])
+        if "reading_list" in C.ctx:
+            sw = C.ctx.get("swarm_results", {})
+            a, b, c_, d_ = st.columns(4)
+            a.metric("Swarm workers", sw.get("total_workers_executed", 0))
+            b.metric("Reading list", len(C.ctx["reading_list"]))
+            c_.metric("Radar alerts", len(C.ctx["radar_deadlines"]))
+            d_.metric("Swarm wall clock (s)", sw.get("swarm_wall_clock_time_sec", 0))
+            for w in C.ctx.get("literature_warnings", []):
+                st.warning(w)
+            st.markdown("**Ranked reading list**")
+            df([{"#": p["ref_num"], "title": p["title"], "year": p["year"], "venue": p["venue"],
+                 "relevance": p["relevance"], "doi": p["doi"], "source": p["source"]} for p in C.ctx["reading_list"]])
+            st.markdown("**Funding / journal radar** (timestamped)")
+            df([{k: d.get(k) for k in ("title", "type", "deadline", "days_remaining", "status",
+                                       "before_your_deadline", "checked_at", "url")} for d in C.ctx["radar_deadlines"]])
         cb, cn = st.columns(2)
         if cb.button("← Back"):
             go(1)
-        if cn.button("Continue to pipeline →", type="primary", disabled="swarm" not in S):
+        if cn.button("Continue → draft", type="primary", disabled="reading_list" not in C.ctx):
             go(3)
 
-    # ---- Stage 4: Pipeline (Lab 7) --------------------------------------------
+    # ---- 4 Draft & checks ------------------------------------------------------------------------------------
     elif stage == 3:
-        st.subheader("Lab 7 · Specialist agent node graph (LangChain + OpenClaw)")
-        max_retry = st.slider("Bounded retry attempts (validation back-edge)", 1, 5, 3)
-        if st.button("▶️ Run pipeline", type="primary"):
-            runtime, orch, validator = S.runtime, S.orchestrator, ValidationAgent()
-            bp = S.blueprint
-            base_ctx = {
-                "topic": S.clarified["topic"], "venue": S.clarified["venue"],
-                "collaborators": S.clarified["collaborators"], "deadline": S.clarified["deadline"],
-                "swarm_results": S.swarm,
-            }
-            runtime.state["status"] = "PIPELINE_RUNNING"
-            runtime.log_audit_step("Graph Init", "Initializing OpenClaw context", {"topic": base_ctx["topic"]})
-            steps_view = st.status("Running specialist agents...", expanded=True)
-            ctx, report, attempts = dict(base_ctx), {"passed": False}, 0
-            while attempts < max_retry:
-                attempts += 1
-                steps_view.write(f"LangChain pass #{attempts}")
-                ctx = orch.execute_sequence(ctx)
-                runtime.log_audit_step("Literature Discovery", "Search & rank via MCP", len(ctx.get("reading_list", [])))
-                runtime.log_audit_step("Gap Analysis", "Novelty vs overlap", ctx.get("gap_analysis", {}).get("novelty_flag"))
-                runtime.log_audit_step("Drafting", "Outline & sections", len(ctx.get("draft_sections", {})))
-                runtime.log_audit_step("Citation Compliance", "Validate references", ctx.get("citation_compliance"))
-                runtime.log_audit_step("Radar", "Deadlines & CFPs", len(ctx.get("radar_deadlines", [])))
-                runtime.log_audit_step("Collaboration", "Section ownership", ctx.get("collaboration"))
-                report = validator.validate(ctx)
-                runtime.log_audit_step("Validation", "Acceptance gate", report,
-                                       status="PASS" if report["passed"] else "FAIL")
-                steps_view.write(f"Validation: {'✅ passed' if report['passed'] else '❌ ' + report['diagnosis']}")
-                if report["passed"]:
-                    break
-                ctx["retry_count"] = attempts
-            S.val_report, S.attempts, S.ctx = report, attempts, ctx
-            if report["passed"]:
-                S.formatted = FormattingSkill().execute({
-                    "title": f"Research on {ctx.get('topic', '').title()}",
-                    "collaborators": [ctx.get("collaborators", "Faculty Author")],
-                    "abstract": ctx.get("gap_analysis", {}).get("novelty_summary", ""),
-                    "sections": ctx.get("draft_sections", {}),
-                    "references": ctx.get("reading_list", []),
-                }, venue_spec=bp.citation_style)
-                ctx["formatted_paper"] = S.formatted
-                S.memory.update_session("current_draft", S.formatted)
-                runtime.checkpoint(session_state=ctx)
-                steps_view.update(label="Pipeline complete — awaiting faculty review", state="complete")
-            else:
-                steps_view.update(label="Validation failed after retries", state="error")
-
-        if "ctx" in S:
-            ctx, rep = S.ctx, S.val_report
-            (st.success if rep["passed"] else st.error)(
-                f"Validation gate {'PASSED' if rep['passed'] else 'FAILED'} after {S.attempts} attempt(s)")
-            for name in rep["passed_checks"]:
-                st.write(f"✅ {name}")
-            for name in rep["failing_checks"]:
-                st.write(f"❌ {name}")
-            t1, t2, t3, t4, t5, t6 = st.tabs(["Reading list", "Gap analysis", "Draft", "Citations",
-                                              "Deadline radar", "Collaboration"])
-            with t1:
-                rl = ctx.get("reading_list", [])
-                for p in rl:
-                    st.markdown(f"**{p.get('title')}** — {p.get('venue', '')}, {p.get('year', '')}  \n"
-                                f"`{p.get('doi', 'N/A')}`  ·  source: {p.get('source', 'local')}")
-            with t2:
-                st.json(ctx.get("gap_analysis", {}))
-            with t3:
-                for sec, txt in ctx.get("draft_sections", {}).items():
-                    with st.expander(sec):
-                        st.write(txt)
-            with t4:
-                st.json(ctx.get("citation_compliance", {}))
-            with t5:
-                rd = ctx.get("radar_deadlines", [])
-                if rd:
-                    st.dataframe(pd.DataFrame(rd), width="stretch", hide_index=True)
-                else:
-                    st.info("No matching deadlines.")
-            with t6:
-                st.json(ctx.get("collaboration", {}))
+        st.subheader("Gap analysis → draft → parallel checks → validation gate (Labs 7, 13)")
+        retries = st.slider("Bounded regenerate attempts", 1, 4, 2)
+        if st.button("▶️ Analyze, draft & check", type="primary"):
+            with st.spinner("Running gap analysis, drafting, citation ‖ collaboration checks..."):
+                C.analyze_gap()
+                for attempt in range(1, retries + 1):
+                    C.draft(); C.check()
+                    if C.validate()["passed"]:
+                        break
+                    C.ctx["retry_count"] = attempt
+                if C.ctx["validation"]["passed"]:
+                    C.assemble()
+                S.drafted = True
+        if S.get("drafted") and "validation" in C.ctx:
+            rep = C.ctx["validation"]
+            (st.success if rep["passed"] else st.error)(f"Validation gate {'PASSED' if rep['passed'] else 'FAILED'}")
+            for n in rep["passed_checks"]:
+                st.write(f"✅ {n}")
+            for n in rep["failing_checks"]:
+                st.write(f"❌ {n}")
+            g = C.ctx["gap_analysis"]
+            with st.expander(f"Gap analysis — {g['novelty_flag']}", expanded=True):
+                st.write(g["novelty_positioning_statement"])
+                st.markdown("**Closest prior work**\n" + "\n".join(f"- {x}" for x in g["closest_prior_work"]))
+                st.markdown("**Candidate angles**\n" + "\n".join(f"- {x}" for x in g["why_our_work_is_unique"]))
+                st.caption("⚠ " + g["uncertainty"])
+            cc = C.ctx["citation_compliance"]
+            c1, c2 = st.columns(2)
+            with c1:
+                st.markdown(f"**Citation & compliance ({cc['citation_style']})** — {cc['word_count']}/{cc['word_limit']} words")
+                for e in cc["errors"]:
+                    st.error(e)
+                for w in cc["warnings"]:
+                    st.warning(w)
+                if not cc["errors"] and not cc["warnings"]:
+                    st.success("No issues.")
+            with c2:
+                st.markdown("**Collaboration (attribution)**")
+                df([{"section": a["section"], "owner": a["owner"], "edits": len(a["edits"]), "status": a["status"]}
+                    for a in C.ctx["collaboration"]["attribution"]])
+            st.markdown("**Draft sections** (editable — authors own every claim)")
+            edited = {}
+            for sec, txt in C.ctx["draft_sections"].items():
+                with st.expander(sec):
+                    edited[sec] = st.text_area("text", txt, key=f"ed_{sec}", height=200, label_visibility="collapsed")
+            if st.button("💾 Save edits & re-check"):
+                C.ctx["draft_sections"] = edited
+                C.check()
+                C.validate()
+                if C.ctx["validation"]["passed"]:
+                    C.assemble()
+                st.rerun()
         cb, cn = st.columns(2)
         if cb.button("← Back"):
             go(2)
-        if cn.button("Continue to faculty review →", type="primary",
-                     disabled="formatted" not in S):
+        if cn.button("Continue → faculty review", type="primary",
+                     disabled=not (S.get("drafted") and C.ctx.get("validation", {}).get("passed"))):
             go(4)
 
-    # ---- Stage 5: Review gate (Lab 6) ------------------------------------------
+    # ---- 5 Faculty review ------------------------------------------------------------------------------------
     elif stage == 4:
-        st.subheader("Lab 6 · Faculty Examiner approval gate")
-        st.warning("Hard stop: nothing is exported or published without explicit human approval.")
-        st.code(S.formatted, language="text")
-        if S.get("gate") is None:
-            approver = st.text_input("Approver name", "Faculty Examiner")
-            ca, cr = st.columns(2)
-            if ca.button("✅ Approve & export", type="primary"):
-                S.runtime.log_audit_step("Human Gate: Publish Formatted Research Paper",
-                                         "Faculty Review", f"APPROVED by {approver}", status="APPROVED")
-                S.final = S.orchestrator._run_export(dict(S.ctx))
-                S.runtime.log_audit_step("Export", "Archive approved document", S.final.get("version"))
-                S.runtime.state["status"] = "PUBLISHED"
-                S.runtime.checkpoint(session_state=S.final)
-                S.memory.archive_task({"topic": S.clarified["topic"], "version": S.final.get("version"),
-                                       "approved_by": approver})
-                S.gate = "approved"
+        st.subheader("Faculty review gate → export (Labs 6, 12)")
+        gov = C.governance_report()
+        cols = st.columns(len(gov["guardrails"]))
+        for col, g in zip(cols, gov["guardrails"]):
+            col.metric(g["guardrail"].split(" ")[0], "✅" if g["passed"] else "❌", help=f"{g['guardrail']} — {g['evidence']}")
+        for r in gov["dynamic_risks"]:
+            st.warning(r)
+        st.code(C.ctx["formatted_paper"], language="text")
+        if S.get("decision") is None:
+            approver = st.text_input("Approver (named human)", "Faculty Examiner")
+            comments = st.text_area("Comments / corrections requested", "")
+            a, r = st.columns(2)
+            if a.button("✅ Approve & export", type="primary"):
+                C.faculty_decision(True, approver, comments)
+                C.export()
+                S.decision = "approved"
                 st.rerun()
-            if cr.button("❌ Reject / request revision"):
-                S.runtime.log_audit_step("Human Gate: Publish Formatted Research Paper",
-                                         "Faculty Review", f"REJECTED by {approver}", status="REJECTED")
-                S.runtime.state["status"] = "STOPPED_AT_FACULTY_GATE"
-                S.gate = "rejected"
+            if r.button("❌ Reject / request revision"):
+                C.faculty_decision(False, approver, comments or "Revision requested")
+                S.decision = "rejected"
                 st.rerun()
-        elif S.gate == "approved":
-            st.success(f"Approved and archived as version **{S.final.get('version')}** "
-                       f"(status: {S.final.get('export_status')})")
-            st.download_button("⬇️ Download paper draft", S.formatted, file_name="research_draft.txt")
-            st.download_button("⬇️ Download audit log (JSON)",
-                               json.dumps(S.runtime.audit_log, indent=2), file_name="audit_log.json")
+        elif S.decision == "approved":
+            st.success(f"Approved and archived as **{C.ctx['version']}** — status {C.ctx['export_status']}")
+            e = C.ctx["tracker_entry"]
+            st.caption(f"sha256 {e['sha256'][:16]}… · {len(e['source_links'])} source links · approved by {e['approved_by']}")
+            d1, d2, d3, d4 = st.columns(4)
+            d1.download_button("⬇ Paper (txt)", C.ctx["formatted_paper"], "research_draft.txt")
+            d2.download_button("⬇ References (BibTeX)", CitationFormatter().to_bibtex(C.ctx["references"]), "references.bib")
+            d3.download_button("⬇ Audit ledger (JSON)", json.dumps(C.ledger.entries, indent=2), "audit_ledger.json")
+            d4.download_button("⬇ Evidence briefing (md)", C.ctx.get("deep_research", {}).get("briefing_markdown", "(run Deep research tab)"), "briefing.md")
         else:
-            st.error("Rejected by Faculty Examiner. Go back to the pipeline to regenerate.")
-            if st.button("← Return to pipeline"):
-                S.gate = None
-                S.runtime.state["status"] = "PIPELINE_RUNNING"
+            st.error(f"Rejected. Feedback recorded: {C.ctx.get('faculty_feedback')}")
+            if st.button("← Return to drafting"):
+                C.approved = False
+                C.runtime.state["status"] = "PIPELINE_RUNNING"
+                S.decision = None
                 go(3)
 
-# ----------------------------------------------------------------------------
-# Inspection tabs
-# ----------------------------------------------------------------------------
-with tools_tab:
+    if C.tracker.versions:
+        with st.expander("📜 Version history & rollback (append-only)"):
+            df(C.tracker.history())
+            ver = st.selectbox("Version", [v["version"] for v in C.tracker.versions])
+            c1, c2 = st.columns(2)
+            if c1.button("Show text"):
+                st.code(C.tracker.get(ver)["text"][:3000], language="text")
+            if c2.button("⏪ Roll back to this version"):
+                rb = C.tracker.rollback(ver, "manual rollback from UI")
+                C.ledger.append("Faculty", "Rollback", f"{ver} -> {rb['version']}")
+                st.success(f"Restored as new entry {rb['version']} (history kept).")
+
+# ----------------------------------------------------------------------------------------------------------------
+# Lab 2 / 4 / 5 / 6
+# ----------------------------------------------------------------------------------------------------------------
+with t_tools:
     st.subheader("Lab 2 · Typed tools (no hallucinated data)")
     kw = st.text_input("Corpus keyword", "edge", key="tool_kw")
     c1, c2 = st.columns(2)
+    res, dl = C.tools.read_corpus(kw), C.tools.read_deadlines(kw)
     with c1:
-        st.markdown("**read_corpus**")
-        res = S.tools.read_corpus(kw)
-        st.caption(f"{len(res)} matching papers")
+        st.markdown(f"**read_corpus** · {len(res)} papers")
         if res:
-            st.dataframe(pd.DataFrame(res), width="stretch", hide_index=True)
+            df(res)
     with c2:
-        st.markdown("**read_deadlines**")
-        dl = S.tools.read_deadlines(kw)
-        st.caption(f"{len(dl)} matching deadlines")
+        st.markdown(f"**read_deadlines** · {len(dl)} entries")
         if dl:
-            st.dataframe(pd.DataFrame(dl), width="stretch", hide_index=True)
+            df(dl)
     with st.expander("read_library"):
-        st.dataframe(pd.DataFrame(S.tools.read_library()), width="stretch", hide_index=True)
+        df(C.tools.read_library())
     with st.expander("read_notes"):
-        st.json(S.tools.read_notes())
+        st.json(C.tools.read_notes())
 
-with memory_tab:
+with t_mem:
     st.subheader("Lab 4 · Short-term session state vs long-term retrieval")
     l, r = st.columns(2)
     with l:
-        st.markdown("**Session state (short-term)**")
-        st.json(json.loads(json.dumps(S.memory.session_state, default=lambda o: getattr(o, "__dict__", str(o)))),
-                expanded=1)
+        st.markdown("**Session state**")
+        st.json(json.loads(json.dumps(C.memory.session_state, default=lambda o: getattr(o, "__dict__", str(o)))), expanded=1)
     with r:
-        st.markdown("**Long-term retrieval**")
-        q = st.text_input("Similarity query", S.get("clarified", {}).get("topic", "edge ai"), key="mem_q")
+        q = st.text_input("Query", C.ctx.get("topic", "edge ai"), key="mem_q")
         mode = st.radio("Mode", ["Similarity", "Tags"], horizontal=True)
-        hits = (S.memory.retrieve_by_similarity(q) if mode == "Similarity"
-                else S.memory.retrieve_by_tags([t.strip() for t in q.split(",") if t.strip()]))
-        st.caption(f"{len(hits)} results")
+        hits = (C.memory.retrieve_by_similarity(q) if mode == "Similarity"
+                else C.memory.retrieve_by_tags([t.strip() for t in q.split(",") if t.strip()]))
         for p in hits:
             st.markdown(f"- **{p['title']}** ({p.get('year', '')})")
         st.markdown("**Prior tasks**")
-        st.write(S.memory.prior_task_history or "None archived yet.")
+        st.write(C.memory.prior_task_history or "None archived yet.")
 
-with mcp_tab:
+with t_mcp:
     st.subheader("Lab 5 · MCP server & governed connector")
-    st.markdown("**Registered tools**")
-    st.dataframe(pd.DataFrame([{"name": t.name, "description": t.description}
-                               for t in S.mcp.list_tools()]), width="stretch", hide_index=True)
-    names = [t.name for t in S.mcp.list_tools()]
-    tool = st.selectbox("Call a tool", names)
-    args_text = st.text_input("Arguments (JSON)", '{"keyword": "edge"}')
+    tl = C.mcp.list_tools()
+    df([{"name": t.name, "description": t.description} for t in tl])
+    tool = st.selectbox("Call a tool", [t.name for t in tl])
+    args = st.text_input("Arguments (JSON)", '{"keyword": "edge"}')
     if st.button("Call tool"):
         try:
-            out = S.mcp.call_tool(tool, json.loads(args_text or "{}"), agent_id="StreamlitUser")
-            st.json(json.loads(out[0].text))
+            st.json(json.loads(C.mcp.call_tool(tool, json.loads(args or "{}"), agent_id="StreamlitUser")[0].text))
         except Exception as exc:
             st.error(f"Tool call failed: {exc}")
-    st.markdown("**Connector audit trail**")
-    trail = S.connector.get_audit_trail()
+    trail = C.connector.get_audit_trail()
+    st.markdown(f"**Access audit trail** · {len(trail)} calls")
     if trail:
-        st.dataframe(pd.DataFrame(trail).astype({"params": str}), width="stretch", hide_index=True)
-    else:
-        st.caption("No connector calls yet.")
+        df(pd.DataFrame(trail).astype({"params": str}).to_dict("records"))
 
-with runtime_tab:
+with t_rt:
     st.subheader("Lab 6 · OpenClaw runtime: budget, audit log, checkpoint")
-    rt = S.runtime
-    a, b, c = st.columns(3)
+    rt = C.runtime
+    a, b = st.columns(2)
     a.metric("Status", rt.state["status"])
     b.metric("Steps used", f"{rt.current_step}/{rt.max_budget_steps}")
-    c.metric("Run ID", rt.state["run_id"].split("-")[-1])
     st.progress(min(rt.current_step / rt.max_budget_steps, 1.0))
     if rt.audit_log:
-        st.dataframe(pd.DataFrame(rt.audit_log), width="stretch", hide_index=True)
-    else:
-        st.caption("No steps logged yet.")
+        df(rt.audit_log)
     k1, k2 = st.columns(2)
     if k1.button("💾 Save checkpoint"):
-        rt.checkpoint(session_state={"clarified": S.get("clarified", {})})
+        rt.checkpoint(session_state={"ctx_keys": list(C.ctx)})
         st.success("Checkpoint saved.")
     if k2.button("♻️ Restore checkpoint"):
         st.success("Restored.") if rt.resume_from_checkpoint() else st.warning("No checkpoint found.")
-        st.rerun()
+
+# ----------------------------------------------------------------------------------------------------------------
+# Lab 9 Deep research
+# ----------------------------------------------------------------------------------------------------------------
+with t_deep:
+    st.subheader("Lab 9 · Deep research: iterative retrieval, evidence table, cited synthesis")
+    if not C.ctx.get("topic"):
+        st.info("Confirm the intake step first (Workflow tab).")
+    else:
+        if st.button("🔎 Run deep research", type="primary"):
+            with st.spinner("Searching, expanding queries, extracting evidence..."):
+                C.deep_research()
+        dr = C.ctx.get("deep_research")
+        if dr:
+            st.markdown("**Research trace** (stops on saturation)")
+            df(dr["trace"])
+            st.markdown("**Evidence table** — every claim is a sentence copied from the cited paper's abstract")
+            df(dr["evidence_table"])
+            st.markdown(dr["briefing_markdown"])
+            for lim in dr["limitations"]:
+                st.caption("⚠ " + lim)
+            if dr["evidence_gaps"]:
+                st.info("Thinly covered terms: " + ", ".join(dr["evidence_gaps"]))
+
+# ----------------------------------------------------------------------------------------------------------------
+# Lab 10 Ops
+# ----------------------------------------------------------------------------------------------------------------
+with t_ops:
+    st.subheader("Lab 10 · Operations: traces, failure injection, diagnosis, recovery")
+    c1, c2, c3 = st.columns(3)
+    n = c1.number_input("Failures to inject", 1, 20, 4)
+    if c2.button("💥 Inject failure into search_online_papers"):
+        C.faults.arm("search_online_papers", failures=int(n))
+        st.warning(f"Armed: next {int(n)} calls will fail with a simulated upstream 503.")
+    if c3.button("📡 Probe search endpoint"):
+        got = C.connector.search_online_papers("edge AI", max_results=3, agent_id="OpsProbe")
+        st.write(f"Probe returned {len(got)} papers · circuit breaker: **{C.connector.breaker.state}** · "
+                 f"degraded calls: {C.connector.degraded_calls}")
+    diag = C.ops.diagnose(C.tracer, C.connector)
+    (st.success if diag["healthy"] else st.error)("HEALTHY" if diag["healthy"] else "DEGRADED / FAILING")
+    for f in diag["findings"]:
+        st.write("• " + f)
+    st.write("**Root-cause hint:** " + diag["root_cause_hint"])
+    st.write("**Recommended:** " + " ".join(diag["recommended_actions"]))
+    if st.button("🛠 Auto-remediate"):
+        st.success(C.ops.remediate(C.connector))
+    if diag["endpoints"]:
+        df([{"endpoint": k, **v} for k, v in diag["endpoints"].items()])
+    with st.expander("Raw traces"):
+        if C.tracer.spans:
+            df(C.tracer.spans[-200:])
+
+# ----------------------------------------------------------------------------------------------------------------
+# Lab 11 SDLC
+# ----------------------------------------------------------------------------------------------------------------
+with t_sdlc:
+    st.subheader("Lab 11 · Agentic SDLC: requirement → design → implementation → tests → traceability")
+    if st.button("🏭 Run SDLC factory", type="primary"):
+        with st.spinner("Building, running acceptance tests and unit tests..."):
+            S.sdlc = SDLCFactory().run()
+    if "sdlc" in S:
+        r = S.sdlc
+        (st.success if r["release_ready"] else st.error)(
+            f"{'RELEASE READY' if r['release_ready'] else 'NOT READY'} · acceptance {int(r['acceptance_pass_rate'] * 100)}% · "
+            f"unit tests {r['unit_tests']['ran']} run / {r['unit_tests']['failures'] + r['unit_tests']['errors']} failed · {r['seconds']}s")
+        st.markdown("**Design**")
+        df([{"layer": a, "implemented by": b} for a, b in r["design"]])
+        st.markdown("**Requirements traceability matrix**")
+        df(r["traceability"])
+
+# ----------------------------------------------------------------------------------------------------------------
+# Lab 12 Governance
+# ----------------------------------------------------------------------------------------------------------------
+with t_gov:
+    st.subheader("Lab 12 · Safety & governance")
+    if "formatted_paper" in C.ctx or "reading_list" in C.ctx:
+        gov = C.governance_report()
+        st.markdown("**Guardrails (live check on the current run)**")
+        df(gov["guardrails"])
+        st.markdown("**Evaluation scorecard**")
+        st.json(gov["metrics"])
+        for r in gov["dynamic_risks"]:
+            st.warning(r)
+    else:
+        st.info("Run the workflow (or the Capstone demo) to evaluate a run.")
+    st.markdown("**Risk register**")
+    df(RISK_REGISTER)
+    st.markdown("**Tamper-evident audit ledger**")
+    v = C.ledger.verify()
+    (st.success if v["intact"] else st.error)(f"Hash chain {'intact' if v['intact'] else 'BROKEN at #' + str(v['broken_at_seq'])} · {v['entries']} entries")
+    if C.ledger.entries:
+        df(C.ledger.entries)
+    if st.button("🧪 Demo: tamper with a copy of the ledger"):
+        import copy
+        led = AuditLedger()
+        if C.ledger.entries:
+            led.entries = copy.deepcopy(C.ledger.entries)
+        else:
+            led.append("demo", "step one"); led.append("demo", "step two")
+        led.entries[0]["detail"] = "edited after the fact"
+        st.error(f"Verification of tampered copy → {led.verify()}")
+    if st.button("📊 Run evaluation regression (3 topics)"):
+        topics = ["edge AI hardware porting frameworks", "federated learning healthcare", "quantum machine learning"]
+        def run_topic(t):
+            return ResearchCoordinator(checkpoint_file="checkpoint_eval.json").run_all({**DEMO, "topic": t})
+        with st.spinner("Running pipeline on each topic..."):
+            df(C.evaluator.regression(run_topic, topics))
+
+# ----------------------------------------------------------------------------------------------------------------
+# Lab 13 Domain
+# ----------------------------------------------------------------------------------------------------------------
+with t_dom:
+    st.subheader("Lab 13 · CSE/AI publishing domain agent")
+    v = st.text_input("Venue description", C.ctx.get("venue", DEMO["venue"]), key="dom_venue")
+    spec = parse_venue(v)
+    a, b, c_, d_ = st.columns(4)
+    a.metric("Style", spec.citation_style); b.metric("Kind", spec.kind)
+    c_.metric("Pages", spec.page_limit); d_.metric("Word limit", spec.word_limit)
+    st.write("**Required structure:** " + " → ".join(spec.sections))
+    refs = C.ctx.get("reading_list") or C.tools.corpus[:3]
+    style = st.radio("Reference style", ["IEEE", "ACM", "APA"], horizontal=True, index=["IEEE", "ACM", "APA"].index(spec.citation_style) if spec.citation_style in ("IEEE", "ACM", "APA") else 0)
+    st.code("\n".join(CitationFormatter().format_all(refs, style)), language="text")
+    with st.expander("BibTeX"):
+        st.code(CitationFormatter().to_bibtex(refs), language="text")
+    orig = C.ctx.get("citation_compliance", {}).get("originality")
+    if orig:
+        st.markdown("**Originality screen (5-gram overlap)**")
+        df(orig["sections"])
+        st.caption(orig["disclaimer"])
+
+# ----------------------------------------------------------------------------------------------------------------
+# Lab 14 Capstone
+# ----------------------------------------------------------------------------------------------------------------
+with t_cap:
+    st.subheader("Lab 14 · Capstone: complete run in one click")
+    st.write("Runs every stage with hybrid parallel/sequential execution and auto-approves the faculty gate "
+             "(demo only — use the Workflow tab for the real human gate).")
+    c1, c2 = st.columns(2)
+    cap_topic = c1.text_input("Topic", DEMO["topic"], key="cap_topic")
+    cap_venue = c2.text_input("Venue", DEMO["venue"], key="cap_venue")
+    if st.button("🏁 Run full demo", type="primary"):
+        demo = ResearchCoordinator(use_live=S.live, checkpoint_file="checkpoint_demo.json")
+        with st.spinner("Running end-to-end..."):
+            try:
+                S.cap = demo.run_all({**DEMO, "topic": cap_topic, "venue": cap_venue}, approve=True, approver="Demo Examiner")
+                S.cap_coord = demo
+            except Exception as exc:
+                st.error(f"Run failed: {exc}")
+    if "cap" in S:
+        r = S.cap
+        m = r["metrics"]
+        a, b, c_, d_ = st.columns(4)
+        a.metric("Overall score", m["overall_score"]); b.metric("References", m["reference_count"])
+        c_.metric("Guardrails", m["guardrails_passed"]); d_.metric("Version", r["ctx"].get("version", "-"))
+        st.markdown("**Execution timeline** (mode shows hybrid methodology)")
+        df(r["timeline"])
+        st.markdown("**Guardrails**")
+        df(r["governance"]["guardrails"])
+        with st.expander("Final paper"):
+            st.code(r["ctx"].get("formatted_paper", "not exported"), language="text")

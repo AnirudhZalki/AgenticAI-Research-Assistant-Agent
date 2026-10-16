@@ -38,6 +38,11 @@ class ValidationAgent:
         compliance_valid = citation_comp.get("compliance_passed", False)
         checks.append(("Citation compliance & reference formatting passed", compliance_valid))
 
+        # Check 5: nothing fabricated - no synthesized references and novelty states its uncertainty
+        no_fabrication = not any("synth" in str(p.get("source", "")).lower() for p in reading_list) and \
+            (not gap_analysis or "uncertainty" in gap_analysis or "novelty_flag" not in gap_analysis)
+        checks.append(("No fabricated references; novelty uncertainty stated", no_fabrication))
+
         # Evaluate failing checks
         failing = [name for name, passed in checks if not passed]
         passed_all = len(failing) == 0

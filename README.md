@@ -1,4 +1,4 @@
-# Agentic AI: Research Assistant Agent (Labs 1 – 8)
+# Agentic AI: Research Assistant Agent (Labs 1 – 14)
 ## Multi-Framework Architecture: LangChain + MCP + OpenClaw
 
 This repository contains the complete implementation of the **Research Assistant Agent** up to **Lab 8**, refactored into a modern tri-layer agentic architecture using **LangChain**, **MCP (Model Context Protocol)**, and **OpenClaw**.
@@ -34,18 +34,37 @@ This repository contains the complete implementation of the **Research Assistant
 
 ---
 
-## 🚀 Lab Milestone Summary (Labs 1 – 8)
+## 🚀 Lab Milestone Summary (Labs 1 – 14)
 
-| Lab | Capability Implemented | Framework Layer | Module / File |
-|---|---|---|---|
-| **Lab 1** | Request parameter clarification & editable plan proposal. | OpenClaw / Foundation | `clarify.py` |
-| **Lab 2** | Typed tools replacing memory hallucinations. | MCP Tool Layer | `search.py` |
-| **Lab 3** | Schema-typed skills: `ResearchPlanSkill` & `FormattingSkill`. | LangChain / Foundation | `skills.py` |
-| **Lab 4** | Session run-state vs stored memory store. | OpenClaw Memory | `memory.py` |
-| **Lab 5** | Model Context Protocol (MCP) Server endpoints (`read_paper_corpus`, `read_library`, `read_deadlines`, `read_notes`). | MCP Protocol Server | `mcp_server.py`, `connector.py` |
-| **Lab 6** | OpenClaw Agent Runtime controller, checkpoints (`checkpoint.json`), audit logs, human gates. | OpenClaw Runtime | `openclaw_runtime.py` |
-| **Lab 7** | Specialist agent node graph executed via LangChain Runnable Sequence with OpenClaw governance. | LangChain + OpenClaw | `langchain_orchestrator.py`, `specialist_agents.py`, `node_graph.py`, `verify.py` |
-| **Lab 8** | Parallel Swarm fan-out workers (`ThreadPoolExecutor`) invoking MCP tools & fan-in merge. | LangChain + MCP | `swarm.py` |
+| Lab | Capability | Module / File |
+|---|---|---|
+| 1 | Clarify → plan → revise loop; Gate 1 refuses to start without topic/venue/collaborators/deadline | `clarify.py`, `coordinator.intake` |
+| 2 | Typed tools instead of recalled data | `search.py` |
+| 3 | Reusable skills (venue-aware plan blueprint, formatting) | `skills.py`, `domain.py` |
+| 4 | Session state vs long-term retrieval | `memory.py` |
+| 5 | MCP server + governed connector with access audit | `mcp_server.py`, `connector.py` |
+| 6 | OpenClaw runtime: step budget, audit log, checkpoints, human gate | `openclaw_runtime.py` |
+| 7 | Specialist agent graph on LangChain runnables + validation gate + bounded retry | `specialist_agents.py`, `langchain_orchestrator.py`, `node_graph.py`, `verify.py` |
+| 8 | Parallel swarm fan-out / fan-in merge | `swarm.py` |
+| 9 | Deep research: iterative retrieval, evidence table, cited briefing | `deep_research.py` |
+| 10 | Cloud-ops style observability: traces, retry/backoff, circuit breaker, fault injection, diagnosis | `ops.py` |
+| 11 | Agentic SDLC: 12 requirements → acceptance tests → traceability matrix | `sdlc.py` |
+| 12 | Governance: 7 executable guardrails, hash-chained audit ledger, risk register, evaluation, rollback | `governance.py`, `tracker.py` |
+| 13 | Discipline agent (CSE/AI publishing): venue parser, IEEE/ACM/APA/BibTeX, originality screen | `domain.py` |
+| 14 | Capstone coordinator with the proposal's hybrid sequential/parallel methodology | `coordinator.py`, `research_agent.py`, `app.py` |
+
+### Proposal guardrails and where they are enforced
+| Guardrail | Enforcement |
+|---|---|
+| Never fabricate a citation/abstract/result | No synthesized papers; validation gate fails on them; draft leaves methods/results as `[AUTHORS TO COMPLETE]` |
+| Flag novelty uncertainty | `GapAnalysisAgent` reports lexical overlap + explicit uncertainty statement |
+| No submission without faculty approval | `coordinator.export()` raises `PermissionError` unless the gate was approved |
+| Preserve co-author attribution | `CollaborationAgent` attributes edits, surfaces conflicts, overwrites nothing |
+| Source links + version history | `tracker.ResearchTracker` (sha256, source links, append-only, rollback) |
+| Audit log | OpenClaw runtime log + tamper-evident `AuditLedger` |
+
+> **Data note:** `data/corpus.json` is a *mock* dataset (labelled `LocalCorpus (mock dataset)` everywhere). For real citations enable
+> "Use live academic APIs" (Semantic Scholar → CrossRef → OpenAlex, no API key needed).
 
 ---
 
@@ -70,7 +89,15 @@ AgenticAI-Research-Assistant-Agent/
 ├── verify.py                # Lab 2 & 7: Validation Agent & citation grounding gate
 ├── node_graph.py            # Lab 7: Node Graph pipeline orchestrator linking LangChain & OpenClaw
 ├── swarm.py                 # Lab 8: Parallel Swarm fan-out workers calling MCP tools & fan-in selector merge
-├── app.py                   # Streamlit web interface for the full Labs 1-8 workflow
+├── app.py                   # Streamlit web interface (Labs 1-14)
+├── coordinator.py           # Lab 14: capstone Research Assistant Coordinator
+├── research_agent.py        # CLI: python research_agent.py start-workflow ...
+├── deep_research.py         # Lab 9
+├── ops.py                   # Lab 10
+├── sdlc.py                  # Lab 11
+├── governance.py            # Lab 12
+├── domain.py                # Lab 13
+├── tracker.py               # Version history / repository
 ├── main.py                  # End-to-End Multi-Framework Orchestrator
 ├── run_labs.py              # Automated test runner for Labs 1 through 8
 └── README.md                # System documentation & execution guide
@@ -91,7 +118,7 @@ AgenticAI-Research-Assistant-Agent/
 python -m pip install -r requirements.txt
 python -m streamlit run app.py
 ```
-Guided workflow: **Clarify (Lab 1) → Plan (Lab 3) → Discover swarm (Lab 8) → Pipeline (Lab 7) → Faculty approval & export (Lab 6)**, plus inspection tabs for typed tools (Lab 2), memory (Lab 4), the MCP server and audit trail (Lab 5), and the OpenClaw runtime audit log/checkpoints (Lab 6). The sidebar toggle switches between the offline local corpus and live academic APIs.
+Guided workflow: **Intake → Plan & outline → Discover (swarm ‖ radar) → Draft & checks → Faculty review & export**, plus one tab per lab (tools, memory, MCP, runtime, deep research, ops/chaos drill, SDLC factory, governance, domain, one-click capstone demo). The sidebar toggle switches between the offline local corpus and live academic APIs.
 
 ---
 
@@ -112,8 +139,14 @@ test_lab_5_mcp_server_connector ... ok
 test_lab_6_openclaw_runtime ... ok
 test_lab_7_langchain_agentic_node_graph ... ok
 test_lab_8_parallel_swarm_mcp ... ok
+test_lab_9_deep_research ... ok
+test_lab_10_cloud_ops_observability ... ok
+test_lab_11_agentic_sdlc ... ok
+test_lab_12_safety_governance ... ok
+test_lab_13_domain_agent ... ok
+test_lab_14_capstone_end_to_end ... ok
 ----------------------------------------------------------------------
-Ran 8 tests in 0.028s
+Ran 14 tests
 
 OK
 ```
@@ -135,3 +168,11 @@ To run the end-to-end pipeline automatically (for CI/CD or benchmark evaluation)
 ```bash
 python main.py --non-interactive --auto-approve
 ```
+
+
+### Option D: Proposal-style command
+```bash
+python research_agent.py start-workflow --topic "edge AI hardware porting frameworks" \
+  --venue "IEEE conference, IMRAD, 6-page limit" --collaborators "self, co-author" --deadline 2026-11-15
+```
+Add `--live` for real academic APIs and `--auto-approve` to skip the terminal approval prompt (testing only).
