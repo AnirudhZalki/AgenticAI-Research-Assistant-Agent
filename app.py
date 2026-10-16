@@ -230,12 +230,8 @@ with t_flow:
         if st.button("▶️ Analyze, draft & check", type="primary"):
             with st.spinner("Running gap analysis, drafting, citation ‖ collaboration checks..."):
                 C.analyze_gap()
-                for attempt in range(1, retries + 1):
-                    S.draft_ver += 1
-                    C.draft(); C.check()
-                    if C.validate()["passed"]:
-                        break
-                    C.ctx["retry_count"] = attempt
+                S.draft_ver += 1
+                C.generate_and_validate(retries)
                 if C.ctx["validation"]["passed"]:
                     C.assemble()
                 S.drafted = True
@@ -248,6 +244,8 @@ with t_flow:
                 st.write(f"❌ {n}")
             if not rep["passed"]:
                 st.info(rep["diagnosis"])
+                if rep.get("stopped_early"):
+                    st.caption(rep["stopped_early"])
             g = C.ctx["gap_analysis"]
             with st.expander(f"Gap analysis — {g['novelty_flag']}", expanded=True):
                 st.write(g["novelty_positioning_statement"])

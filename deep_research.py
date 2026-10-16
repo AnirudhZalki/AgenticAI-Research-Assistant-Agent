@@ -13,7 +13,7 @@ import re
 from collections import Counter
 from typing import Any, Dict, List
 
-from specialist_agents import ABBREV, expand_query, relevance, terms
+from specialist_agents import ABBREV, expand_query, relevance, terms, year_of, strip_cites
 
 
 def _sentences(text: str) -> List[str]:
@@ -66,7 +66,7 @@ class DeepResearchAgent:
         else:
             trace[-1]["stop_reason"] = "max rounds reached"
 
-        ranked = sorted(papers.values(), key=lambda p: (relevance(topic, p), p.get("year", 0)), reverse=True)
+        ranked = sorted(papers.values(), key=lambda p: (relevance(topic, p), year_of(p)), reverse=True)
         refs = []
         for i, p in enumerate(ranked[:10], 1):
             refs.append({**p, "ref_num": i, "relevance": relevance(topic, p)})

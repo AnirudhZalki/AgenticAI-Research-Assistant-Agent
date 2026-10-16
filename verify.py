@@ -47,12 +47,16 @@ class ValidationAgent:
         failing = [name for name, passed in checks if not passed]
         passed_all = len(failing) == 0
 
+        detail = ""
+        if not compliance_valid:
+            errs = citation_comp.get("errors", [])
+            detail = (" Citation problems: " + "; ".join(errs[:4])) if errs else ""
         report = {
             "passed": passed_all,
             "failing_checks": failing,
             "passed_checks": [name for name, passed in checks if passed],
             "diagnosis": "All validation gates passed cleanly." if passed_all else
-            (f"Validation failures detected: {failing}" +
+            (f"Validation failures detected: {failing}.{detail}" +
              (f" Only {len(reading_list)} relevant source(s) were found - enable live academic APIs or broaden the topic."
               if len(reading_list) < 5 else ""))
         }

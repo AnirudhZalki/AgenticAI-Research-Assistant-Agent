@@ -175,6 +175,25 @@ class ResearchCoordinator:
         self._log("Validation", "Acceptance gate", rep["diagnosis"], "PASS" if rep["passed"] else "FAIL")
         return rep
 
+    def generate_and_validate(self, max_attempts: int = 3) -> Dict[str, Any]:
+        """Draft -> parallel checks -> validation, regenerating (bounded) only while a retry can change the outcome."""
+        rep: Dict[str, Any] = {"passed": False}
+        previous = None
+        for attempt in range(1, max_attempts + 1):
+            self.draft()
+            self.check()
+            rep = self.validate()
+            rep["attempts"] = attempt
+            if rep["passed"]:
+                break
+            signature = (tuple(rep["failing_checks"]), tuple(self.ctx["citation_compliance"]["errors"]))
+            if signature == previous:       # identical failure: regenerating is deterministic, so stop and report
+                rep["stopped_early"] = "Regeneration produced the same failure; fix the cause below instead of retrying."
+                break
+            previous = signature
+            self.ctx["retry_count"] = attempt
+        return rep
+
     def assemble(self) -> str:
         """Format the validated draft (with attributed co-author notes) for faculty review."""
         sections = dict(self.ctx.get("draft_sections", {}))
@@ -243,14 +262,7 @@ class ResearchCoordinator:
         self.discover()
         self.deep_research()
         self.analyze_gap()
-        rep = {"passed": False}
-        for attempt in range(1, max_retries + 2):
-            self.draft()
-            self.check()
-            rep = self.validate()
-            if rep["passed"]:
-                break
-            self.ctx["retry_count"] = attempt
+        rep = self.generate_and_validate(max_retries + 1)
         result = {"ctx": self.ctx, "validation": rep}
         if rep["passed"]:
             self.assemble()

@@ -78,6 +78,17 @@ def relevance(topic: str, paper: Dict[str, Any]) -> float:
     return round(sum(1 for w in t if hit(w)) / len(t), 3)
 
 
+def year_of(p: Dict[str, Any]) -> int:
+    """Publication year as int; 0 when missing/garbled (real APIs return None or strings)."""
+    m = re.search(r"\d{4}", str(p.get("year") or ""))
+    return int(m.group()) if m else 0
+
+
+def strip_cites(text: str) -> str:
+    """Remove the source's own bracketed citation markers ([12], [3, 4], [1-3]) so they are not mistaken for ours."""
+    return re.sub(r"\[\s*\d+(?:\s*[,;\u2013-]\s*\d+)*\s*\]", "", text or "")
+
+
 def first_sentence(text: str, limit: int = 240) -> str:
     s = re.split(r"(?<=[.!?])\s", (text or "").strip())[0]
     return s if len(s) <= limit else s[:limit].rsplit(" ", 1)[0] + "..."
@@ -105,7 +116,7 @@ class LiteratureDiscoveryAgent:
                 q = dict(p)
                 q.setdefault("source", "LocalCorpus (mock dataset)")
                 pool[key] = q
-        ranked = sorted(pool.values(), key=lambda p: (relevance(topic, p), p.get("year", 0)), reverse=True)
+        ranked = sorted(pool.values(), key=lambda p: (relevance(topic, p), year_of(p)), reverse=True)
         strong = [p for p in ranked if relevance(topic, p) >= 0.3]
         weak = [p for p in ranked if 0 < relevance(topic, p) < 0.3]
         chosen = (strong + weak)[: self.target_count]          # papers sharing no topic term are never listed
@@ -116,9 +127,9 @@ class LiteratureDiscoveryAgent:
             doi = p.get("doi") or "N/A"
             summarized.append({
                 "ref_num": idx, "id": p.get("id", f"REF_{idx}"), "title": p.get("title", "Untitled"),
-                "year": p.get("year", "n.d."), "venue": p.get("venue", "Unknown Venue"),
+                "year": year_of(p) or "n.d.", "venue": p.get("venue", "Unknown Venue"),
                 "authors": p.get("authors") or ["Unknown"],
-                "summary": p.get("abstract") or "No abstract available.",
+                "summary": strip_cites(p.get("abstract") or "") or "No abstract available.",
                 "keywords": p.get("keywords", []), "doi": doi,
                 "source": p["source"], "relevance": rel, "topic_match": rel >= 0.3,
                 "source_link": f"https://doi.org/{doi}" if doi != "N/A" else "",
@@ -300,9 +311,11 @@ class CitationComplianceAgent:
         seen_titles = set()
         for p in refs:
             tag = f"[{p.get('ref_num')}]"
-            for fld in ("title", "authors", "year"):
-                if not p.get(fld) or p.get(fld) in ("Unknown", ["Unknown"]):
-                    errors.append(f"{tag} missing {fld}")
+            if not p.get("title"):
+                errors.append(f"{tag} missing title")
+            for fld in ("authors", "year"):
+                if not p.get(fld) or p.get(fld) in ("Unknown", ["Unknown"], "n.d."):
+                    warnings.append(f"{tag} missing {fld} - verify at the source (not invented)")
             if "synth" in str(p.get("source", "")).lower():
                 errors.append(f"{tag} synthesized (unverifiable) reference - remove")
             if p.get("doi") in (None, "", "N/A"):
@@ -315,7 +328,8 @@ class CitationComplianceAgent:
             seen_titles.add(k)
 
         full_text = "\n".join(sections.values())
-        cited = {int(n) for n in re.findall(r"\[(\d+)\]", full_text)}
+        own_text = "\n".join(l for l in full_text.splitlines() if "Summary:" not in l)
+        cited = {int(n) for n in re.findall(r"\[(\d+)\]", own_text)}
         listed = {p.get("ref_num") for p in refs}
         for n in sorted(cited - listed):
             errors.append(f"in-text citation [{n}] has no reference entry")
