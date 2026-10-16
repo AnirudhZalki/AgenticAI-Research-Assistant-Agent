@@ -13,7 +13,7 @@ import re
 from collections import Counter
 from typing import Any, Dict, List
 
-from specialist_agents import relevance, terms
+from specialist_agents import ABBREV, expand_query, relevance, terms
 
 
 def _sentences(text: str) -> List[str]:
@@ -29,10 +29,11 @@ class DeepResearchAgent:
     def _search(self, query: str, use_online: bool) -> List[Dict[str, Any]]:
         found: List[Dict[str, Any]] = []
         if use_online:
-            found += self.connector.search_online_papers(query, max_results=self.per_query, agent_id="DeepResearchAgent")
-        for w in terms(query):                      # corpus matching is substring-per-keyword, so query per term
+            found += self.connector.search_online_papers(expand_query(query), max_results=self.per_query,
+                                                         agent_id="DeepResearchAgent")
+        for w in terms(expand_query(query)):        # corpus matching is substring-per-keyword, so query per term
             found += self.connector.read_paper_corpus(w, agent_id="DeepResearchAgent")
-        return found
+        return [p for p in found if relevance(query, p) > 0]   # drop papers sharing no topic term
 
     def run(self, topic: str, use_online: bool = True) -> Dict[str, Any]:
         papers: Dict[str, Dict[str, Any]] = {}

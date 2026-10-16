@@ -44,6 +44,17 @@ DEMO = dict(topic="edge AI hardware porting frameworks", venue="IEEE conference,
 TRACKER_FILE = "research_tracker.json"
 
 
+@st.cache_resource(ttl=300, show_spinner=False)
+def internet_ok() -> bool:
+    """Quick reachability probe so live academic APIs are the default whenever they can actually be used."""
+    import urllib.request
+    try:
+        urllib.request.urlopen("https://api.openalex.org/works?per-page=1", timeout=4).close()
+        return True
+    except Exception:
+        return False
+
+
 def df(rows, **kw):
     st.dataframe(pd.DataFrame(rows), width="stretch", hide_index=True, **kw)
 
@@ -52,17 +63,23 @@ def new_coordinator(live: bool):
     return ResearchCoordinator(use_live=live, tracker_path=TRACKER_FILE, checkpoint_file="checkpoint_app.json")
 
 
+def clear_topic_state(extra=()):
+    """Everything derived from a topic must be dropped when the topic changes (sub-queries, draft widgets, decision)."""
+    for k in ["outline_draft", "drafted", "decision", "subq", *extra]:
+        st.session_state.pop(k, None)
+    st.session_state.draft_ver = st.session_state.get("draft_ver", 0) + 1
+
+
 def reset(live: bool = None):
     live = st.session_state.get("live", False) if live is None else live
     st.session_state.live = live
     st.session_state.coord = new_coordinator(live)
     st.session_state.stage = 0
-    for k in ["params", "outline_draft", "drafted", "decision"]:
-        st.session_state.pop(k, None)
+    clear_topic_state(["params"])
 
 
 if "coord" not in st.session_state:
-    reset(False)
+    reset(internet_ok())
 S = st.session_state
 C: ResearchCoordinator = S.coord
 
@@ -84,7 +101,10 @@ with st.sidebar:
         reset(live)
         st.rerun()
     if not S.live:
-        st.warning("Offline mode: references come from a mock dataset and are not citable.", icon="⚠️")
+        st.warning("Offline mode: only the small MOCK corpus (a few demo topics) is searched. Other topics will find "
+                   "nothing; turn on live APIs for real papers.", icon="⚠️")
+    else:
+        st.success("Live mode: Semantic Scholar → CrossRef → OpenAlex", icon="🌐")
     st.markdown("**Workflow progress**")
     for i, name in enumerate(STAGES):
         st.write(f"{'✅' if i < S.stage else ('▶️' if i == S.stage else '⚪')} {name}")
@@ -128,7 +148,8 @@ with t_flow:
                 st.warning("Assistant: I still need → " + ", ".join(f"**{m}**" for m in missing))
             else:
                 try:
-                    C.intake(S.params)
+                    C.intake(S.params)          # starts a fresh context for this topic
+                    clear_topic_state()
                     C.plan()
                     S.outline_draft = list(C.blueprint.sections)
                     go(1)
@@ -189,7 +210,7 @@ with t_flow:
             c_.metric("Radar alerts", len(C.ctx["radar_deadlines"]))
             d_.metric("Swarm wall clock (s)", sw.get("swarm_wall_clock_time_sec", 0))
             for w in C.ctx.get("literature_warnings", []):
-                st.warning(w)
+                (st.error if w.startswith("NO relevant") else st.warning)(w)
             st.markdown("**Ranked reading list**")
             df([{"#": p["ref_num"], "title": p["title"], "year": p["year"], "venue": p["venue"],
                  "relevance": p["relevance"], "doi": p["doi"], "source": p["source"]} for p in C.ctx["reading_list"]])
@@ -199,7 +220,7 @@ with t_flow:
         cb, cn = st.columns(2)
         if cb.button("← Back"):
             go(1)
-        if cn.button("Continue → draft", type="primary", disabled="reading_list" not in C.ctx):
+        if cn.button("Continue → draft", type="primary", disabled=not C.ctx.get("reading_list")):
             go(3)
 
     # ---- 4 Draft & checks ------------------------------------------------------------------------------------
@@ -210,6 +231,7 @@ with t_flow:
             with st.spinner("Running gap analysis, drafting, citation ‖ collaboration checks..."):
                 C.analyze_gap()
                 for attempt in range(1, retries + 1):
+                    S.draft_ver += 1
                     C.draft(); C.check()
                     if C.validate()["passed"]:
                         break
@@ -224,6 +246,8 @@ with t_flow:
                 st.write(f"✅ {n}")
             for n in rep["failing_checks"]:
                 st.write(f"❌ {n}")
+            if not rep["passed"]:
+                st.info(rep["diagnosis"])
             g = C.ctx["gap_analysis"]
             with st.expander(f"Gap analysis — {g['novelty_flag']}", expanded=True):
                 st.write(g["novelty_positioning_statement"])
@@ -248,9 +272,10 @@ with t_flow:
             edited = {}
             for sec, txt in C.ctx["draft_sections"].items():
                 with st.expander(sec):
-                    edited[sec] = st.text_area("text", txt, key=f"ed_{sec}", height=200, label_visibility="collapsed")
+                    edited[sec] = st.text_area("text", txt, key=f"ed_{S.draft_ver}_{sec}", height=200, label_visibility="collapsed")
             if st.button("💾 Save edits & re-check"):
                 C.ctx["draft_sections"] = edited
+                S.draft_ver += 1
                 C.check()
                 C.validate()
                 if C.ctx["validation"]["passed"]:
@@ -484,10 +509,14 @@ with t_gov:
             led.append("demo", "step one"); led.append("demo", "step two")
         led.entries[0]["detail"] = "edited after the fact"
         st.error(f"Verification of tampered copy → {led.verify()}")
-    if st.button("📊 Run evaluation regression (3 topics)"):
-        topics = ["edge AI hardware porting frameworks", "federated learning healthcare", "quantum machine learning"]
+    st.markdown("**Evaluation regression** — runs the whole pipeline once per topic and scores each run")
+    default_topics = "\n".join(dict.fromkeys([C.ctx.get("topic", DEMO["topic"]), "federated learning healthcare",
+                                              "quantum machine learning"]))
+    topics_text = st.text_area("Topics to evaluate (one per line)", default_topics, key=f"reg_topics_{C.ctx.get('topic', '')}", height=100)
+    if st.button("📊 Run evaluation regression"):
+        topics = [t.strip() for t in topics_text.splitlines() if t.strip()]
         def run_topic(t):
-            return ResearchCoordinator(checkpoint_file="checkpoint_eval.json").run_all({**DEMO, "topic": t})
+            return ResearchCoordinator(use_live=S.live, checkpoint_file="checkpoint_eval.json").run_all({**DEMO, "topic": t})
         with st.spinner("Running pipeline on each topic..."):
             df(C.evaluator.regression(run_topic, topics))
 
