@@ -41,15 +41,41 @@ def _paper_text(p: Dict[str, Any]) -> str:
     return f"{p.get('title', '')} {p.get('abstract', '')} {' '.join(p.get('keywords', []) or [])}".lower()
 
 
+ABBREV = {
+    "gru": ["gated recurrent unit"], "lstm": ["long short-term memory", "long short term memory"],
+    "rnn": ["recurrent neural network"], "cnn": ["convolutional neural network"],
+    "gan": ["generative adversarial network"], "gnn": ["graph neural network"],
+    "nlp": ["natural language processing"], "llm": ["large language model"],
+    "rag": ["retrieval-augmented generation", "retrieval augmented generation"],
+    "iot": ["internet of things"], "rl": ["reinforcement learning"], "svm": ["support vector machine"],
+    "tinyml": ["tiny machine learning"], "bert": ["bidirectional encoder representations"],
+    "vit": ["vision transformer"], "nas": ["neural architecture search"],
+}
+
+
+def expand_query(topic: str) -> str:
+    """Append the spelled-out form of known acronyms (GRU -> gated recurrent unit) so searches find real papers."""
+    extra = []
+    for w in re.findall(r"[A-Za-z0-9\-]+", topic or ""):
+        for phrase in ABBREV.get(w.lower(), [])[:1]:
+            if phrase not in topic.lower():
+                extra.append(phrase)
+    return f"{topic} {' '.join(extra)}".strip()
+
+
 def relevance(topic: str, paper: Dict[str, Any]) -> float:
-    """Fraction of topic terms that appear in the paper's title/abstract/keywords (prefix match covers plurals)."""
+    """Fraction of topic terms found in the paper's title/abstract/keywords (acronyms match their expansion)."""
     t = terms(topic)
     if not t:
         return 0.0
     text = _paper_text(paper)
     words = set(re.findall(r"[a-z0-9\-]+", text))
-    hit = sum(1 for w in t if w in words or any(x.startswith(w[:max(4, len(w) - 2)]) for x in words))
-    return round(hit / len(t), 3)
+
+    def hit(w: str) -> bool:
+        if w in words or any(ph in text for ph in ABBREV.get(w, [])):
+            return True
+        return len(w) > 4 and any(x.startswith(w[:len(w) - 2]) for x in words)   # plurals / suffixes
+    return round(sum(1 for w in t if hit(w)) / len(t), 3)
 
 
 def first_sentence(text: str, limit: int = 240) -> str:
@@ -68,7 +94,7 @@ class LiteratureDiscoveryAgent:
         warnings: List[str] = []
 
         print(f"    [LiteratureDiscoveryAgent] Querying scholarly sources for: '{topic}'")
-        live = connector.search_online_papers(topic, max_results=self.target_count, agent_id="LiteratureDiscoveryAgent")
+        live = connector.search_online_papers(expand_query(topic), max_results=self.target_count, agent_id="LiteratureDiscoveryAgent")
         local = connector.read_paper_corpus("", agent_id="LiteratureDiscoveryAgent")
 
         pool: Dict[str, Dict[str, Any]] = {}
@@ -80,8 +106,10 @@ class LiteratureDiscoveryAgent:
                 q.setdefault("source", "LocalCorpus (mock dataset)")
                 pool[key] = q
         ranked = sorted(pool.values(), key=lambda p: (relevance(topic, p), p.get("year", 0)), reverse=True)
+        strong = [p for p in ranked if relevance(topic, p) >= 0.3]
+        weak = [p for p in ranked if 0 < relevance(topic, p) < 0.3]
+        chosen = (strong + weak)[: self.target_count]          # papers sharing no topic term are never listed
 
-        chosen = ranked[: self.target_count]
         summarized = []
         for idx, p in enumerate(chosen, start=1):
             rel = relevance(topic, p)
@@ -98,12 +126,16 @@ class LiteratureDiscoveryAgent:
             })
 
         on_topic = sum(1 for p in summarized if p["topic_match"])
-        if len(summarized) < self.target_count:
-            warnings.append(f"Only {len(summarized)} papers available (target {self.target_count}); no references were invented.")
+        if not summarized:
+            warnings.append(f"NO relevant sources found for '{topic}'. Turn on 'Use live academic APIs' (the offline mock "
+                            f"corpus only covers a few demo topics) or broaden the topic.")
+        elif len(summarized) < self.target_count:
+            warnings.append(f"Only {len(summarized)} relevant papers found (target {self.target_count}); "
+                            f"no references were invented or padded.")
         if on_topic < len(summarized):
             warnings.append(f"{len(summarized) - on_topic} of {len(summarized)} references are weakly related to the topic "
                             f"(relevance < 0.30) - review before citing.")
-        if all("mock" in p["source"] for p in summarized):
+        if summarized and all("mock" in p["source"] for p in summarized):
             warnings.append("All references come from the local MOCK corpus. Enable live academic APIs for real citations.")
 
         ctx["reading_list"] = summarized
@@ -127,7 +159,9 @@ class GapAnalysisAgent:
         thin = [w for w, c in coverage.items() if c <= 1]
         well = [w for w, c in coverage.items() if c >= max(3, len(refs) // 2)]
 
-        if len(close) >= 3:
+        if not refs:
+            flag, level = "NOT ASSESSABLE - no sources were retrieved", "NONE"
+        elif len(close) >= 3:
             flag, level = "LIKELY WELL-COVERED - needs a sharply differentiated contribution", "LOW"
         elif close or len(partial) >= 2:
             flag, level = "PARTIALLY COVERED - novelty must come from a specific angle", "MEDIUM"
@@ -260,6 +294,9 @@ class CitationComplianceAgent:
         errors: List[str] = []
         warnings: List[str] = []
 
+        if len(refs) < 5:
+            errors.append(f"only {len(refs)} relevant reference(s) found; at least 5 are required - enable live "
+                          f"academic APIs or broaden the topic")
         seen_titles = set()
         for p in refs:
             tag = f"[{p.get('ref_num')}]"

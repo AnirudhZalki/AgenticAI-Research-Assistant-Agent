@@ -51,7 +51,10 @@ class ValidationAgent:
             "passed": passed_all,
             "failing_checks": failing,
             "passed_checks": [name for name, passed in checks if passed],
-            "diagnosis": "All validation gates passed cleanly." if passed_all else f"Validation failures detected: {failing}"
+            "diagnosis": "All validation gates passed cleanly." if passed_all else
+            (f"Validation failures detected: {failing}" +
+             (f" Only {len(reading_list)} relevant source(s) were found - enable live academic APIs or broaden the topic."
+              if len(reading_list) < 5 else ""))
         }
 
         print(f"Validation Result: Passed={report['passed']}")
