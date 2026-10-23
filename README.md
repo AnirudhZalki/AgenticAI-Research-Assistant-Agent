@@ -7,7 +7,7 @@ This repository contains the complete implementation of the **Research Assistant
 
 ---
 
-## 🏛️ Tri-Layer System Architecture
+## Tri-Layer System Architecture
 
 ```text
 +-----------------------------------------------------------------------------------+
@@ -34,7 +34,7 @@ This repository contains the complete implementation of the **Research Assistant
 
 ---
 
-## 🚀 Lab Milestone Summary (Labs 1 – 14)
+## Lab Milestone Summary (Labs 1 – 14)
 
 | Lab | Capability | Module / File |
 |---|---|---|
@@ -68,7 +68,7 @@ This repository contains the complete implementation of the **Research Assistant
 
 ---
 
-## 📁 Repository Structure
+## Repository Structure
 
 ```text
 AgenticAI-Research-Assistant-Agent/
@@ -109,7 +109,7 @@ AgenticAI-Research-Assistant-Agent/
 
 ---
 
-## 🛠️ How to Execute
+## How to Execute
 
 ### Prerequisites
 - Python 3.8+
