@@ -61,6 +61,30 @@ class MemoryStore:
         scored.sort(key=lambda x: x[0], reverse=True)
         return [paper for score, paper in scored[:top_k]]
 
+    def retrieve_by_vector(self, query: str, top_k: int = 3) -> List[Dict[str, Any]]:
+        """TF-IDF vector retrieval with cosine similarity over title+abstract+keywords (dependency-free 'embedding')."""
+        import math
+        import re
+        from collections import Counter
+
+        def toks(t):
+            return re.findall(r"[a-z0-9]+", t.lower())
+        docs = [(p, toks(f"{p.get('title', '')} {p.get('abstract', '')} {' '.join(p.get('keywords', []))}"))
+                for p in self.paper_corpus]
+        n = len(docs) or 1
+        df = Counter(w for _, d in docs for w in set(d))
+        idf = lambda w: math.log((n + 1) / (df.get(w, 0) + 1)) + 1
+        def vec(tokens):
+            tf = Counter(tokens)
+            return {w: c * idf(w) for w, c in tf.items()}
+        def cos(a, b):
+            num = sum(a[w] * b.get(w, 0) for w in a)
+            den = math.sqrt(sum(v * v for v in a.values())) * math.sqrt(sum(v * v for v in b.values()))
+            return num / den if den else 0.0
+        q = vec(toks(query))
+        scored = sorted(((cos(q, vec(d)), p) for p, d in docs), key=lambda x: x[0], reverse=True)
+        return [dict(p, similarity=round(sc, 3)) for sc, p in scored[:top_k] if sc > 0]
+
     def retrieve_prior_tasks(self, query: str) -> List[Dict[str, Any]]:
         """Retrieves similar past research tasks from history to prevent duplicate research."""
         q = query.lower()

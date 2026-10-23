@@ -131,3 +131,97 @@ class OriginalityChecker:
                 "passed": not flagged,
                 "disclaimer": "Screens against the loaded corpus/library only; not a substitute for a full "
                               "plagiarism service (e.g., iThenticate/Turnitin)."}
+
+
+# =====================================================================================================================
+# Lab 13: pluggable domain packs (registry) - each pack carries a CHECKABLE scheme, not just prose
+# =====================================================================================================================
+@dataclass
+class DomainPack:
+    key: str
+    name: str
+    detect_terms: List[str]
+    extra_sections: List[str]                    # inserted into the outline when missing
+    method_guidance: List[str]                   # what the authors must state in methods/experiments
+    abbreviations: Dict[str, List[str]]          # acronym -> expansions used for search + relevance
+    required_checks: List[Dict[str, Any]]        # {"name", "section_keywords", "must_contain": [terms]}
+
+    def checks(self, sections: Dict[str, str]) -> List[Dict[str, Any]]:
+        """Checkable scheme: each rule needs a matching section containing at least one required term (or an
+        explicit AUTHORS TO COMPLETE placeholder naming it, which is reported as 'pending authors')."""
+        out = []
+        for rule in self.required_checks:
+            keys = rule["section_keywords"]
+            raw = " ".join(t for s, t in sections.items() if any(k in s.lower() for k in keys)).lower()
+            body = re.sub(r"\[authors to complete[^\]]*\]", " ", raw)       # a placeholder is not compliance
+            present = bool(raw)
+            hit = present and any(w in body for w in rule["must_contain"])
+            out.append({"pack": self.key, "check": rule["name"],
+                        "status": "PASS" if hit else ("PENDING_AUTHORS" if present else "MISSING_SECTION"),
+                        "needs": ", ".join(rule["must_contain"][:3])})
+        return out
+
+    def guidance_text(self) -> str:
+        return "Domain checklist (" + self.name + "): " + "; ".join(self.method_guidance)
+
+
+PACKS: Dict[str, DomainPack] = {
+    "cs": DomainPack(
+        "cs", "Computer Science / AI",
+        ["neural", "learning", "network", "ai", "algorithm", "software", "edge", "embedded", "transformer", "gru", "lstm",
+         "language", "vision", "data", "model", "compiler", "iot", "security", "federated"],
+        ["Reproducibility & Artifact Availability"],
+        ["datasets and train/validation/test splits", "baselines and hyper-parameters", "hardware and software versions",
+         "random seeds and number of runs", "metrics with confidence intervals", "code/data availability"],
+        {"gru": ["gated recurrent unit"], "lstm": ["long short-term memory"], "cnn": ["convolutional neural network"],
+         "mcu": ["microcontroller"], "npu": ["neural processing unit"]},
+        [{"name": "Reproducibility statement present", "section_keywords": ["reproducib", "artifact", "experiment"],
+          "must_contain": ["seed", "dataset", "code availability", "repository", "split"]}]),
+    "biosciences": DomainPack(
+        "biosciences", "Biosciences",
+        ["gene", "protein", "cell", "clinical", "patient", "dna", "rna", "genom", "crispr", "pcr", "biolog", "disease",
+         "drug", "therap", "enzyme", "cancer", "bacteri", "virus"],
+        ["Ethics, Consent & Data Availability"],
+        ["sample size and power calculation", "inclusion/exclusion criteria", "statistical tests and p-value correction",
+         "ethics approval / consent statement", "reagent, strain and instrument identifiers", "data deposition (e.g., GEO)"],
+        {"pcr": ["polymerase chain reaction"], "crispr": ["clustered regularly interspaced short palindromic repeats"],
+         "dna": ["deoxyribonucleic acid"], "rna": ["ribonucleic acid"], "ngs": ["next-generation sequencing"]},
+        [{"name": "Ethics / consent statement present", "section_keywords": ["ethic", "consent"],
+          "must_contain": ["ethics", "consent", "irb", "approval"]},
+         {"name": "Statistical methods stated", "section_keywords": ["method", "result"],
+          "must_contain": ["p-value", "statistic", "confidence", "sample size"]}]),
+    "materials": DomainPack(
+        "materials", "Materials Science",
+        ["alloy", "polymer", "ceramic", "nanomaterial", "composite", "crystal", "semiconductor", "perovskite", "graphene",
+         "corrosion", "fatigue", "steel", "thin film", "coating", "xrd", "sem"],
+        ["Synthesis & Characterization"],
+        ["synthesis route, precursors and conditions (temperature, time, atmosphere)",
+         "characterization techniques (XRD, SEM, TEM, XPS) with instrument settings",
+         "SI units and measurement uncertainty", "sample preparation and number of specimens",
+         "property measurements with standards (e.g., ASTM/ISO)"],
+        {"xrd": ["x-ray diffraction"], "sem": ["scanning electron microscopy"], "tem": ["transmission electron microscopy"],
+         "xps": ["x-ray photoelectron spectroscopy"], "dsc": ["differential scanning calorimetry"]},
+        [{"name": "Characterization methods stated", "section_keywords": ["characteriz", "method"],
+          "must_contain": ["xrd", "sem", "tem", "xps", "spectroscop", "diffraction"]},
+         {"name": "Units / standards stated", "section_keywords": ["method", "experiment", "characteriz"],
+          "must_contain": [" mpa", " gpa", " k ", "°c", "astm", "iso ", "si unit"]}]),
+}
+
+
+def detect_domain(topic: str) -> str:
+    """Pick the pack whose vocabulary best matches the topic (defaults to CS)."""
+    t = (topic or "").lower()
+    scores = {k: sum(1 for w in p.detect_terms if w in t) for k, p in PACKS.items()}
+    best = max(scores, key=scores.get)
+    return best if scores[best] > 0 else "cs"
+
+
+def get_pack(key: str = "") -> DomainPack:
+    return PACKS.get(key or "cs", PACKS["cs"])
+
+
+def all_pack_abbreviations() -> Dict[str, List[str]]:
+    out: Dict[str, List[str]] = {}
+    for p in PACKS.values():
+        out.update(p.abbreviations)
+    return out

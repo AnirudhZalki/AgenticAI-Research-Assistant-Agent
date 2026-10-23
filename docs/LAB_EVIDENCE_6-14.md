@@ -1,50 +1,41 @@
-# Review-sheet text for Labs 6–14 (copy into the worklet sheet)
+# Review-sheet text, aligned to Chapter 12 of the Build Book (Research Assistant Agent)
 
-Evidence for every lab: `python run_labs.py` (14 tests) and the Streamlit app tab named in brackets.
+Run `python run_labs.py` (25 tests) and open the Streamlit tab named in brackets. Each entry lists the chapter's acceptance
+criterion and how it is met.
 
-## Lab 6 — OpenClaw Runtime  [Runtime tab]
-**Concept:** runtime that executes steps with a budget, audit log, checkpoints and a human gate.
-**Stack:** Python, `openclaw_runtime.py`, JSON checkpoints.
-**Implementation:** `OpenClawAgentRuntime.log_audit_step` enforces a step budget; `checkpoint`/`resume_from_checkpoint` persist run state; `human_approval_gate` blocks export until the Faculty Examiner approves. The coordinator logs every stage here.
-**Evidence:** `test_lab_6_openclaw_runtime`, Runtime tab (audit table, checkpoint save/restore).
+## Lab 1 — Agent vs Chatbot  [Workflow · Intake]
+**Accept:** a vague request yields ≥ 2 clarifying questions and an editable plan.
+`RequestClarifier.questions()` asks per missing field and probes vague topics ("GRU" → 5 questions); the outline can be edited (add/remove/reorder) before confirmation. Test: `test_lab_1_asks_clarifying_questions`.
 
-## Lab 7 — Agentic Node Graph  [Draft & checks stage]
-**Concept:** graph orchestration with branching and bounded retry.
-**Stack:** LangChain `RunnableSequence/RunnableLambda/RunnableParallel`, specialist agents.
-**Implementation:** Literature → Gap → Drafting → Citation ‖ Collaboration → Validation gate → (bounded regenerate) → Faculty gate → Export. Agents never invent references; validation fails on synthesized sources.
-**Evidence:** `test_lab_7_*`, workflow tab 4.
+## Lab 4 — Memory & Retrieval  [Memory tab]
+**Accept:** retrieval returns tagged candidates and similar prior items. Session state vs long-term store; tag retrieval, keyword similarity, and **vector retrieval (TF-IDF cosine)** (`retrieve_by_vector`); prior tasks archived and surfaced at intake. Test: `test_lab_4_vector_retrieval`.
+
+## Lab 5 — Connector  [MCP tab]
+**Accept:** all data access goes through the connector, typed endpoints **and auth**. `ResearchDataConnector(auth_required=True)` enforces least-privilege scopes per agent (e.g. the radar cannot read collaboration notes); every ALLOWED/DENIED call is audited. Tools are exposed with `mcp.types.Tool`. Test: `test_lab_5_connector_enforces_scopes`.
+
+## Lab 6 — Runtime  [Runtime tab]
+**Accept:** every action logged with inputs/outputs; a crashed run resumes from its last checkpoint. The coordinator checkpoints after every stage; `coordinator.resume()` / sidebar "Resume last run" restores the context and stage. Test: `test_lab_6_resume_after_crash`.
+
+## Lab 7 — Agentic Node Graph  [Workflow]
+**Accept:** one command yields a validated draft end to end; retry edge bounded. Literature ‖ Radar → Gap → Draft → Citation ‖ Collaboration → Validation (7 checks) → self-healing back-edge (bounded) → faculty gate → export. `python research_agent.py start-workflow …`.
 
 ## Lab 8 — Parallel Swarm  [Discover stage]
-**Concept:** fan-out workers + merge. **Stack:** `ThreadPoolExecutor`, MCP tools.
-**Implementation:** one worker per sub-query calls MCP `read_paper_corpus`/`read_funding_deadlines`; `MergeSelector` de-duplicates and ranks by alignment with the topic; results feed the Literature agent.
-**Evidence:** `test_lab_8_*`, swarm metrics in tab 3.
+**Accept:** parallel matches sequential quality at lower wall-clock time. `ParallelSwarm.benchmark()` runs both and compares merged results and time (button in the Discover stage; per-call latency can be simulated offline). Test: `test_lab_8_parallel_beats_sequential`.
 
-## Lab 9 — Deep Research Agent  [Deep research tab]
-**Concept:** deep research with evidence synthesis. **Stack:** `deep_research.py`, MCP connector, live APIs or local corpus.
-**Implementation:** multi-round retrieval; each round expands the query with frequent keywords of what was found and stops on saturation. Builds an evidence table (claim = sentence copied from the paper abstract, DOI, source, confidence) and a cited briefing with limitations and evidence gaps.
-**Evidence:** `test_lab_9_deep_research`; trace + evidence table in the tab.
+## Lab 9 — Deep Research: ground & evidence  [Discover stage, Deep research tab]
+**Accept:** every output maps to an in-scope source; ungrounded candidates are rejected. Each reference carries an **evidence record** (source, scope, tags, retrieved_at, supporting sentence). The grounding step rejects out-of-scope or record-less candidates (logged with the reason). Validation also requires every drafted claim to map to a grounded reference. Iterative deep research builds the paper-level evidence table. Test: `test_lab_9_grounding_rejects_ungrounded`.
 
-## Lab 10 — Cloud Operations Agent  [Ops tab]
-**Concept:** observability and failure handling. **Stack:** `ops.py` (Tracer, CircuitBreaker, FaultInjector, OpsAgent).
-**Implementation:** every connector endpoint is traced (latency, status); the search endpoint has retry with exponential backoff, a circuit breaker and graceful fallback to the local corpus. The tab injects failures (the "failed deployment"), shows the breaker opening, diagnoses the root cause, and remediates.
-**Evidence:** `test_lab_10_cloud_ops_observability`; Ops tab drill (inject → probe → diagnose → auto-remediate).
+## Lab 10 — Ops Resilience: validate, diagnose, fix  [Workflow · Draft, Ops tab]
+**Accept:** injected faults are detected and fixed within the retry budget; regenerate only the failing part; escalate to the human when exhausted. `healing.SelfHealer` maps each failing check to a targeted repair (drop a fabricated reference and rebuild only dependent sections; strip one dangling marker; re-tag only untagged sections …) and logs a diagnosis per repair. Six faults can be injected from the Ops tab; an unfixable one (too few sources) escalates with suggested actions. API-level resilience (retry, circuit breaker, tracing) is in `ops.py`. Test: `test_lab_10_self_healing_targeted_repair`.
 
-## Lab 11 — Agentic SDLC Factory  [SDLC tab]
-**Concept:** requirements → tested implementation. **Stack:** `sdlc.py`, `unittest`.
-**Implementation:** 12 requirements derived from the proposal, each with an executable acceptance test (including negative tests: gate refusal, tampered ledger). The factory runs the pipeline, executes the tests plus the lab unit tests, and outputs a requirements-traceability matrix and a release-ready verdict.
-**Evidence:** `test_lab_11_agentic_sdlc`; SDLC tab matrix.
+## Lab 11 — SDLC Factory: spec → tested output  [Draft stage, SDLC tab]
+**Accept:** no brief advances to the researcher without a fully passing acceptance report. `coordinator.build()` = plan → brief + acceptance report (8 criteria AC1–AC8); `faculty_decision(approve)` raises `PermissionError` unless every criterion passes. The SDLC tab runs 17 requirement-level acceptance tests plus all unit tests and prints a traceability matrix. Tests: `test_lab_11_acceptance_gates_human_review`, `test_lab_11_agentic_sdlc`.
 
-## Lab 12 — Safety & Governance  [Governance tab]
-**Concept:** approval gates, audit logs, evaluation, rollback. **Stack:** `governance.py`, `tracker.py`, `hashlib`.
-**Implementation:** seven executable guardrails (G1–G7); hash-chained tamper-evident ledger (edits are detected); risk register with dynamic escalation (e.g. mock-only sources); per-run scorecard and multi-topic regression; append-only version history with rollback.
-**Evidence:** `test_lab_12_safety_governance`; Governance tab (guardrails, tamper demo, regression), version history in Workflow tab.
+## Lab 12 — Safety & Governance  [Review stage, Governance tab]
+**Accept:** only researcher-approved results publish; any release rolls back cleanly; confidentiality controls. `access.py`: roles (faculty, co-author, student assistant, research office) decide who can approve / roll back / export / view confidential drafts; unpublished drafts are classified CONFIDENTIAL and **redacted** for roles without access; denials are audited in the hash-chained ledger. Plus 7 guardrails, risk register, scorecard, metrics history, append-only versions with one-click rollback. Test: `test_lab_12_roles_and_confidentiality`.
 
-## Lab 13 — Discipline-Specific Agent (CSE/AI publishing)  [Domain tab]
-**Concept:** domain worklet. **Stack:** `domain.py`.
-**Implementation:** parses a free-text venue into citation style, structure (IMRAD/survey/grant) and page→word limits; formats IEEE/ACM/APA references and BibTeX without inventing missing fields; screens drafts for 5-gram overlap with known sources.
-**Evidence:** `test_lab_13_domain_agent`; Domain tab.
+## Lab 13 — Discipline-Specific Agents  [Domain tab]
+**Accept:** specialist outputs use valid domain patterns and produce checkable results. Pluggable **domain packs** (CS/AI, Biosciences, Materials) selected by auto-detection or manually; each adds required sections to the plan, domain guidance for the authors, acronym expansions for search, and **checkable rules** (e.g. ethics/consent statement present, characterization methods and units stated). Venue/citation formatting (IEEE/ACM/APA/BibTeX) and originality screen in `domain.py`. Test: `test_lab_13_domain_packs`.
 
-## Lab 14 — Capstone  [Capstone tab + whole Workflow]
-**Concept:** integrated system. **Stack:** LangChain + OpenClaw + MCP + Streamlit.
-**Implementation:** `ResearchCoordinator` runs Gate 1 → outline → parallel discovery → gap → draft → parallel checks → validation → faculty gate → parallel export, with timeline, guardrails, scorecard and version history. Also available as `research_agent.py start-workflow` (the proposal's prompt command).
-**Evidence:** `test_lab_14_capstone_end_to_end`; Capstone tab timeline.
+## Lab 14 — Capstone  [Dashboard, Capstone tab]
+**Accept:** request → approved, published brief in one session, with dashboard + audit trail. The researcher dashboard shows the four chapter panels (reading list & gap · draft & compliance · deadline radar with a **continuous background monitor** · collaboration & versions), metrics, acceptance report and audit trail. Test: `test_lab_14_capstone_end_to_end`, `test_radar_monitor_continuous`.

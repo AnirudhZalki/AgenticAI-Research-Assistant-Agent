@@ -24,6 +24,11 @@ from governance import AuditLedger, GuardrailPolicy, Evaluator
 from domain import parse_venue, CitationFormatter, OriginalityChecker
 from coordinator import ResearchCoordinator
 from tracker import ResearchTracker
+from healing import FAULTS, SelfHealer, inject_fault
+from access import AccessControl, Actor, redact_view
+from radar import RadarMonitor
+from domain import detect_domain, get_pack
+from swarm import ParallelSwarm
 
 REQUEST = {"topic": "edge AI hardware porting frameworks", "venue": "IEEE conference, IMRAD, 6-page limit",
            "collaborators": "Faculty Author, Co-Author A", "deadline": "2026-11-15"}
@@ -210,6 +215,166 @@ class TestResearchAgentLabs(unittest.TestCase):
         self.assertGreaterEqual(sum(t["mode"] == "PARALLEL" for t in res["timeline"]), 3)
         self.assertEqual(len(c.tracker.history()), 1)
         print("  [PASS] Lab 14: Capstone coordinator runs end-to-end with all gates.")
+
+    # ---------------------------------------------------------------- chapter-12 acceptance additions
+    def _built(self, req=None):
+        c = ResearchCoordinator(checkpoint_file="checkpoint_app.json")
+        c.build(req or REQUEST)
+        return c
+
+    def test_lab_1_asks_clarifying_questions(self):
+        """Lab 1 acceptance: a vague request yields at least two clarifying questions."""
+        qs = RequestClarifier().questions({"topic": "GRU"})
+        self.assertGreaterEqual(len(qs), 2)
+        self.assertEqual(RequestClarifier().questions(REQUEST), [])
+        print("  [PASS] Lab 1: vague request triggers clarifying questions.")
+
+    def test_lab_4_vector_retrieval(self):
+        """Lab 4: vector (TF-IDF cosine) retrieval returns the closest paper."""
+        mem = MemoryStore(corpus=SearchTools().corpus)
+        hits = mem.retrieve_by_vector("quantisation for microcontrollers")
+        self.assertIn("Edge AI", hits[0]["title"])
+        self.assertGreater(hits[0]["similarity"], 0)
+        print("  [PASS] Lab 4: vector similarity retrieval works.")
+
+    def test_lab_5_connector_enforces_scopes(self):
+        """Lab 5: typed endpoints with auth - agents only reach endpoints in their scope."""
+        c = ResearchCoordinator(checkpoint_file="checkpoint_app.json")
+        c.connector.read_funding_deadlines("edge", agent_id="FundingRadarAgent")
+        with self.assertRaises(PermissionError):
+            c.connector.read_collaboration_notes(agent_id="FundingRadarAgent")
+        with self.assertRaises(PermissionError):
+            c.connector.read_paper_corpus("x", agent_id="UnknownAgent")
+        self.assertTrue(any(e["decision"] == "DENIED" for e in c.connector.get_audit_trail()))
+        print("  [PASS] Lab 5: connector scopes enforced and denials audited.")
+
+    def test_lab_6_resume_after_crash(self):
+        """Lab 6: a crashed run resumes from its last checkpoint."""
+        c = ResearchCoordinator(checkpoint_file="checkpoint_resume.json")
+        c.intake(REQUEST); c.plan(); c.confirm_outline(c.blueprint.sections); c.discover(); c.analyze_gap()
+        refs = len(c.ctx["reading_list"])
+        del c                                                   # "crash"
+        c2 = ResearchCoordinator(checkpoint_file="checkpoint_resume.json")
+        self.assertEqual(c2.resume(), "draft")
+        self.assertEqual(len(c2.ctx["reading_list"]), refs)
+        rep = c2.generate_and_validate()
+        self.assertTrue(rep["passed"])
+        import os
+        os.remove(c2.checkpoint_path)
+        print("  [PASS] Lab 6: run resumed from checkpoint and finished.")
+
+    def test_lab_8_parallel_beats_sequential(self):
+        """Lab 8 acceptance: parallel matches sequential quality at lower wall-clock time."""
+        b = ParallelSwarm().benchmark(["edge AI", "microcontroller", "benchmarking", "hardware"], "edge AI",
+                                      simulated_latency_s=0.03)
+        self.assertTrue(b["same_merged_result"])
+        self.assertLess(b["parallel_s"], b["sequential_s"])
+        print("  [PASS] Lab 8: parallel faster with identical merged result.")
+
+    def test_lab_9_grounding_rejects_ungrounded(self):
+        """Lab 9: ungrounded / out-of-scope candidates are rejected; every kept item has an evidence record."""
+        c = ResearchCoordinator(checkpoint_file="checkpoint_app.json")
+        c.intake(REQUEST)
+        pool = c.tools.corpus + [
+            {"id": "X1", "title": "Edge AI blog post", "authors": ["Anon"], "abstract": "edge ai hardware porting rumours",
+             "keywords": ["edge ai"], "doi": "N/A", "source": "RandomBlog.example"},
+            {"id": "X2", "title": "Edge AI hardware porting stub", "authors": ["Anon"], "abstract": "", "keywords": [],
+             "doi": "N/A", "source": "OpenAlex"}]
+        c.tools.read_corpus = lambda kw="": pool
+        c.discover()
+        titles = [p["title"] for p in c.ctx["reading_list"]]
+        self.assertNotIn("Edge AI blog post", titles)
+        self.assertNotIn("Edge AI hardware porting stub", titles)
+        reasons = {r["title"]: r["reason"] for r in c.ctx["rejected_references"]}
+        self.assertIn("out of approved scope", reasons["Edge AI blog post"])
+        self.assertIn("no abstract", reasons["Edge AI hardware porting stub"])
+        self.assertTrue(all(p["evidence"]["grounded"] and p["evidence"]["supporting_sentence"] for p in c.ctx["reading_list"]))
+        print("  [PASS] Lab 9: ungrounded candidates rejected; evidence records attached.")
+
+    def test_lab_10_self_healing_targeted_repair(self):
+        """Lab 10: injected validation faults are diagnosed and repaired in the retry budget; only the failing part changes."""
+        for kind in [k for k in FAULTS if "unfixable" not in k]:
+            c = self._built()
+            sections_before = dict(c.ctx["draft_sections"])
+            inject_fault(c, kind)
+            c.check()
+            rep = c.validate()
+            self.assertFalse(rep["passed"], kind)
+            out = SelfHealer(c, budget=3).heal(rep)
+            self.assertTrue(out["healed"], f"{kind}: {out['report']['diagnosis']}")
+            self.assertLessEqual(out["attempts"], 3)
+            self.assertTrue(all(e["repair"] != "-" for e in out["log"] if e["fixed"]))
+            if kind in ("remove_ai_marker", "dangling_citation"):
+                unchanged = [t for t in sections_before if c.ctx["draft_sections"][t] == sections_before[t]]
+                self.assertGreaterEqual(len(unchanged), len(sections_before) - 2, f"{kind} rebuilt too much")
+        c = self._built()                                       # unfixable -> escalate to the human
+        inject_fault(c, "starved_sources (unfixable)")
+        c.check()
+        out = SelfHealer(c).heal(c.validate())
+        self.assertTrue(out["escalated"])
+        self.assertIn("escalation", c.ctx)
+        print("  [PASS] Lab 10: faults detected, repaired in-budget; unfixable case escalated.")
+
+    def test_lab_11_acceptance_gates_human_review(self):
+        """Lab 11: no brief advances to approval without a fully passing acceptance report."""
+        c = self._built()
+        self.assertTrue(c.ctx["acceptance"]["all_pass"])
+        c.ctx["acceptance"]["all_pass"] = False
+        c.ctx["acceptance"]["checks"][0]["result"] = "FAIL"
+        with self.assertRaises(PermissionError):
+            c.faculty_decision(True, "Dr X")
+        c.ctx["acceptance"] = c.acceptance_suite()
+        c.faculty_decision(True, "Dr X")
+        c.export()
+        print("  [PASS] Lab 11: acceptance report gates the faculty approval.")
+
+    def test_lab_12_roles_and_confidentiality(self):
+        """Lab 12: only authorised roles approve/rollback; unpublished drafts are redacted for others."""
+        c = self._built()
+        for role in ("student_assistant", "research_office", "coauthor"):
+            with self.assertRaises(PermissionError):
+                c.faculty_decision(True, "Someone", role=role)
+        self.assertTrue(any(e["status"] == "DENIED" for e in c.ledger.entries))
+        view = redact_view(c.ctx, Actor("Office", "research_office"))
+        self.assertTrue(all("REDACTED" in t for t in view["draft_sections"].values()))
+        self.assertEqual(redact_view(c.ctx, Actor("Dr X", "faculty"))["draft_sections"], c.ctx["draft_sections"])
+        self.assertIn("CONFIDENTIAL", c.classification())
+        c.faculty_decision(True, "Dr X", role="faculty")
+        c.export()
+        with self.assertRaises(PermissionError):
+            c.rollback(c.ctx["version"], "Student", role="student_assistant")
+        self.assertIn("INTERNAL", c.classification())
+        self.assertFalse(Actor("S", "student_assistant").can_approve)
+        print("  [PASS] Lab 12: role checks and confidentiality enforced.")
+
+    def test_lab_13_domain_packs(self):
+        """Lab 13: pluggable packs - detection, extra sections and checkable schemes per discipline."""
+        self.assertEqual(detect_domain("CRISPR gene editing in cancer cells"), "biosciences")
+        self.assertEqual(detect_domain("perovskite thin film XRD characterization"), "materials")
+        self.assertEqual(detect_domain("GRU neural network"), "cs")
+        c = ResearchCoordinator(checkpoint_file="checkpoint_app.json")
+        c.intake({**REQUEST, "topic": "perovskite thin film XRD characterization", "domain": ""})
+        c.plan()
+        self.assertTrue(any("Synthesis & Characterization" in s for s in c.ctx["plan_sections"]))
+        checks = get_pack("materials").checks({"3. Methods": "We used XRD at 40 kV and ASTM E8 tensile tests at 25 °C."})
+        self.assertTrue(all(ch["status"] == "PASS" for ch in checks))
+        pending = get_pack("biosciences").checks({"2. Ethics": "[AUTHORS TO COMPLETE: ethics, consent]"})
+        self.assertEqual(pending[0]["status"], "PENDING_AUTHORS")
+        print("  [PASS] Lab 13: domain packs plug in sections and checkable rules.")
+
+    def test_radar_monitor_continuous(self):
+        """Proposal: the radar runs continuously in the background and flags new/urgent alerts."""
+        c = ResearchCoordinator(checkpoint_file="checkpoint_app.json")
+        m = RadarMonitor(c.connector, "edge AI hardware porting", "2026-12-01", interval_s=0.05)
+        m.start()
+        import time
+        time.sleep(0.3)
+        m.stop()
+        self.assertGreaterEqual(len(m.digest), 2)
+        self.assertTrue(m.digest[0]["new"])
+        self.assertFalse(m.digest[1]["new"])
+        self.assertFalse(m.running)
+        print("  [PASS] Radar monitor: background checks, new-alert detection.")
 
 def run_all_tests():
     print("==========================================================================")

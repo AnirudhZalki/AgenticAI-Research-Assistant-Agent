@@ -19,7 +19,8 @@ from datetime import date, datetime
 from typing import Any, Dict, List
 
 from connector import ResearchDataConnector
-from domain import CitationFormatter, OriginalityChecker, parse_venue
+from domain import (CitationFormatter, OriginalityChecker, all_pack_abbreviations, detect_domain, get_pack,
+                    parse_venue)
 from tracker import ResearchTracker
 
 AI_TAG = "[AI-DRAFTED - pending faculty review]"
@@ -51,6 +52,27 @@ ABBREV = {
     "tinyml": ["tiny machine learning"], "bert": ["bidirectional encoder representations"],
     "vit": ["vision transformer"], "nas": ["neural architecture search"],
 }
+
+
+for _k, _v in all_pack_abbreviations().items():          # domain packs extend the acronym table (XRD, PCR, ...)
+    ABBREV.setdefault(_k, _v)
+
+DEFAULT_APPROVED_SOURCES = ["SemanticScholar", "CrossRef", "OpenAlex", "LocalCorpus (mock dataset)", "ResearcherLibrary"]
+
+
+def make_evidence(p: Dict[str, Any], topic: str, approved: List[str]) -> Dict[str, Any]:
+    """Evidence record for one retrieved item: provenance, scope, tags and the sentence that supports relevance."""
+    abstract = p.get("abstract") or ""
+    sents = [x for x in re.split(r"(?<=[.!?])\s+", abstract) if len(x) > 25]
+    tset = set(terms(topic))
+    best = max(sents, key=lambda x: len(tset & set(terms(x))), default="")
+    has_record = bool(p.get("title")) and (bool(abstract) or (p.get("doi") not in (None, "", "N/A")))
+    in_scope = p.get("source") in approved
+    tags = list(p.get("keywords") or []) or sorted(tset & set(terms(_paper_text(p))))
+    return {"source": p.get("source"), "scope": "approved corpus" if in_scope else "OUT OF SCOPE",
+            "tags": tags, "retrieved_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+            "supporting_sentence": strip_cites(best), "in_scope": in_scope,
+            "grounded": in_scope and has_record}
 
 
 def expand_query(topic: str) -> str:
@@ -116,7 +138,17 @@ class LiteratureDiscoveryAgent:
                 q = dict(p)
                 q.setdefault("source", "LocalCorpus (mock dataset)")
                 pool[key] = q
-        ranked = sorted(pool.values(), key=lambda p: (relevance(topic, p), year_of(p)), reverse=True)
+        approved = list(ctx.get("approved_sources") or DEFAULT_APPROVED_SOURCES)
+        rejected, kept = [], {}
+        for key, p in pool.items():                       # grounding step (Lab 9): ungrounded/out-of-scope items are rejected
+            ev = make_evidence(p, topic, approved)
+            if ev["grounded"]:
+                kept[key] = p
+            else:
+                rejected.append({"title": p.get("title"), "source": p.get("source"),
+                                 "reason": "out of approved scope" if not ev["in_scope"] else "no abstract or DOI to ground it"})
+        ctx["rejected_references"] = rejected
+        ranked = sorted(kept.values(), key=lambda p: (relevance(topic, p), year_of(p)), reverse=True)
         strong = [p for p in ranked if relevance(topic, p) >= 0.3]
         weak = [p for p in ranked if 0 < relevance(topic, p) < 0.3]
         chosen = (strong + weak)[: self.target_count]          # papers sharing no topic term are never listed
@@ -134,6 +166,7 @@ class LiteratureDiscoveryAgent:
                 "source": p["source"], "relevance": rel, "topic_match": rel >= 0.3,
                 "source_link": f"https://doi.org/{doi}" if doi != "N/A" else "",
                 "retrieved_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+                "evidence": make_evidence(p, topic, approved),
             })
 
         on_topic = sum(1 for p in summarized if p["topic_match"])
@@ -149,6 +182,8 @@ class LiteratureDiscoveryAgent:
         if summarized and all("mock" in p["source"] for p in summarized):
             warnings.append("All references come from the local MOCK corpus. Enable live academic APIs for real citations.")
 
+        if rejected:
+            warnings.append(f"{len(rejected)} candidate(s) rejected by the grounding step (see evidence log).")
         ctx["reading_list"] = summarized
         ctx["literature_warnings"] = warnings
         print(f"  [LiteratureDiscoveryAgent] Ranked {len(summarized)} papers ({on_topic} on-topic).")
@@ -232,7 +267,8 @@ class DraftingWritingAgent:
     @staticmethod
     def _kind(title: str) -> str:
         t = title.lower()
-        for kind, keys in (("lit", ("literature", "related", "background", "prior", "taxonomy")),
+        for kind, keys in (("domain", ("reproducib", "ethic", "consent", "synthesis", "characteriz", "availability")),
+                           ("lit", ("literature", "related", "background", "prior", "taxonomy")),
                            ("unique", ("unique", "novel", "gap", "challenge", "differentiat")),
                            ("intro", ("abstract", "introduction", "summary", "motivation")),
                            ("method", ("method", "architecture", "approach", "work plan", "objective")),
@@ -242,53 +278,63 @@ class DraftingWritingAgent:
                 return kind
         return "generic"
 
-    def step(self, ctx: Dict[str, Any], connector: ResearchDataConnector) -> Dict[str, Any]:
+    def build_section(self, ctx: Dict[str, Any], title: str) -> str:
+        """Build ONE section (also used by the self-healer to regenerate only a failing section)."""
         topic = ctx.get("topic", "Research Topic")
         venue = ctx.get("venue", "IEEE Conference")
         refs = ctx.get("reading_list", [])
         gap = ctx.get("gap_analysis", {})
-        outline = self.make_outline(ctx)
+        pack = get_pack(ctx.get("domain") or detect_domain(topic))
+        kind = self._kind(title)
+        if kind == "lit":
+            lines = [AI_TAG, f"The retrieved literature on {topic} comprises {len(refs)} papers:"]
+            for p in refs:
+                lines.append(
+                    f"  - [{p['ref_num']}] {', '.join(p['authors'][:3])}{' et al.' if len(p['authors']) > 3 else ''} "
+                    f"({p['year']}), \"{p['title']}\", {p['venue']}. DOI: {p['doi']} [Source: {p['source']}]\n"
+                    f"    Summary: {first_sentence(p['summary'])}")
+            return "\n".join(lines)
+        if kind == "unique":
+            return (f"{AI_TAG}\nPRELIMINARY NOVELTY ASSESSMENT: {gap.get('novelty_flag', 'n/a')}\n"
+                    f"Closest prior work: {'; '.join(gap.get('closest_prior_work', [])) or 'none'}\n"
+                    f"Candidate angles:\n" + "\n".join(f"  - {a}" for a in gap.get("why_our_work_is_unique", []))
+                    + f"\nUNCERTAINTY: {gap.get('uncertainty', '')}")
+        if kind == "intro":
+            return (f"{AI_TAG}\nThis work addresses {topic}, targeting {venue}. "
+                    f"Preliminary novelty assessment: {gap.get('novelty_flag', 'n/a')}. "
+                    f"Contributions must be stated by the authors.")
+        if kind == "method":
+            return (f"{AI_TAG}\n[AUTHORS TO COMPLETE: describe the proposed method for {topic}. {pack.guidance_text()}. "
+                    f"The assistant does not invent design details.]")
+        if kind == "experiment":
+            base = ", ".join("[" + str(p["ref_num"]) + "]" for p in refs[:4])
+            return (f"{AI_TAG}\n[AUTHORS TO COMPLETE: experimental setup, baselines drawn from {base}, metrics and "
+                    f"measured results. No results are claimed by the assistant.]")
+        if kind == "domain":
+            return f"{AI_TAG}\n[AUTHORS TO COMPLETE: {title}. {pack.guidance_text()}.]"
+        if kind == "conclusion":
+            return (f"{AI_TAG}\n[AUTHORS TO COMPLETE: summarize validated findings and future work on {topic} "
+                    f"once results exist.]")
+        return f"{AI_TAG}\n[AUTHORS TO COMPLETE: content for this section on {topic}.]"
 
-        lit_lines = [f"{AI_TAG}", f"The retrieved literature on {topic} comprises {len(refs)} papers:"]
-        for p in refs:
-            lit_lines.append(
-                f"  - [{p['ref_num']}] {', '.join(p['authors'][:3])}{' et al.' if len(p['authors']) > 3 else ''} "
-                f"({p['year']}), \"{p['title']}\", {p['venue']}. DOI: {p['doi']} [Source: {p['source']}]\n"
-                f"    Summary: {first_sentence(p['summary'])}")
-        lit_text = "\n".join(lit_lines)
-
-        unique_text = (f"{AI_TAG}\nPRELIMINARY NOVELTY ASSESSMENT: {gap.get('novelty_flag', 'n/a')}\n"
-                       f"Closest prior work: {'; '.join(gap.get('closest_prior_work', [])) or 'none'}\n"
-                       f"Candidate angles:\n" + "\n".join(f"  - {a}" for a in gap.get("why_our_work_is_unique", []))
-                       + f"\nUNCERTAINTY: {gap.get('uncertainty', '')}")
-
-        builders = {
-            "intro": lambda: (f"{AI_TAG}\nThis work addresses {topic}, targeting {venue}. "
-                              f"Preliminary novelty assessment: {gap.get('novelty_flag', 'n/a')}. "
-                              f"Contributions must be stated by the authors."),
-            "lit": lambda: lit_text,
-            "unique": lambda: unique_text,
-            "method": lambda: (f"{AI_TAG}\n[AUTHORS TO COMPLETE: describe the proposed method/architecture for {topic}. "
-                               f"The assistant does not invent design details.]"),
-            "experiment": lambda: (f"{AI_TAG}\n[AUTHORS TO COMPLETE: experimental setup, baselines drawn from "
-                                   f"{', '.join('[' + str(p['ref_num']) + ']' for p in refs[:4])}, metrics and measured results. "
-                                   f"No results are claimed by the assistant.]"),
-            "conclusion": lambda: (f"{AI_TAG}\n[AUTHORS TO COMPLETE: summarize validated findings and future work on "
-                                   f"{topic} once results exist.]"),
-            "generic": lambda: f"{AI_TAG}\n[AUTHORS TO COMPLETE: content for this section on {topic}.]",
-        }
-        sections = {title: builders[self._kind(title)]() for title in outline}
-
-        # Reference completeness: every reference must be cited at least once in the text.
+    def _ensure_all_cited(self, ctx: Dict[str, Any], sections: Dict[str, str], outline: List[str]):
+        refs = ctx.get("reading_list", [])
         cited = {int(n) for body in sections.values() for n in re.findall(r"\[(\d+)\]", body)}
         missing = [p["ref_num"] for p in refs if p["ref_num"] not in cited]
         if missing and sections:
             first = next((t for t in outline if self._kind(t) in ("intro", "lit")), outline[0])
             sections[first] += "\nAdditional references considered: " + ", ".join(f"[{n}]" for n in missing) + "."
 
+    def step(self, ctx: Dict[str, Any], connector: ResearchDataConnector) -> Dict[str, Any]:
+        refs = ctx.get("reading_list", [])
+        outline = self.make_outline(ctx)
+        sections = {title: self.build_section(ctx, title) for title in outline}
+        self._ensure_all_cited(ctx, sections, outline)
         ctx["outline"] = outline
         ctx["draft_sections"] = sections
         ctx["references"] = refs
+        # every drafted claim is paired with the reference (and evidence record) that supports it
+        ctx["claims"] = [{"text": first_sentence(p["summary"]), "ref": p["ref_num"]} for p in refs]
         print(f"  [DraftingWritingAgent] Drafted {len(sections)} sections citing {len(refs)} references.")
         return ctx
 
@@ -346,6 +392,11 @@ class CitationComplianceAgent:
         if originality["flagged_sections"]:
             warnings.append(f"high text overlap with known sources in: {', '.join(originality['flagged_sections'])}")
 
+        pack = get_pack(ctx.get("domain") or detect_domain(ctx.get("topic", "")))
+        domain_checks = pack.checks(sections)
+        for dc in domain_checks:
+            if dc["status"] != "PASS":
+                warnings.append(f"[{pack.name}] {dc['check']}: {dc['status'].replace('_', ' ').lower()} (needs {dc['needs']})")
         self_cite = [l for l in library if relevance(ctx.get("topic", ""), l) >= 0.2]
         report = {
             "total_references": len(refs),
@@ -355,6 +406,7 @@ class CitationComplianceAgent:
             "citation_style": spec.citation_style, "word_count": words, "word_limit": spec.word_limit,
             "errors": errors, "warnings": warnings,
             "formatted_references": formatted, "originality": originality,
+            "domain": pack.key, "domain_checks": domain_checks,
             "compliance_passed": len(refs) >= 5 and not errors,
         }
         ctx["citation_compliance"] = report

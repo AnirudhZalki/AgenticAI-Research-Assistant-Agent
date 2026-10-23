@@ -16,37 +16,44 @@ class ValidationAgent:
         Executes strict acceptance checks on the current run context.
         """
         print("\n--- VALIDATION AGENT: ACCEPTANCE GATE CHECK ---")
-        checks = []
-        
-        # Check 1: Reading list exists and references have valid IDs & titles (Grounding)
+        checks = []          # (id, name, passed)
+
         reading_list = ctx.get("reading_list", [])
-        grounded = len(reading_list) > 0 and all("id" in p and "title" in p for p in reading_list)
-        checks.append(("Every claim cites a real source (no fabricated citations)", grounded))
-
-        # Check 2: Gap analysis & uniqueness decision exists
         gap_analysis = ctx.get("gap_analysis", {})
-        gap_valid = bool(gap_analysis and ("novelty_flag" in gap_analysis or "why_our_work_is_unique" in gap_analysis))
-        checks.append(("Gap analysis evaluates topic novelty & uniqueness vs literature", gap_valid))
-
-        # Check 3: Draft sections match outline structure
         sections = ctx.get("draft_sections", {})
-        sections_valid = len(sections) >= 3
-        checks.append(("Draft structure contains all required sections", sections_valid))
-
-        # Check 4: Citation compliance report passed
         citation_comp = ctx.get("citation_compliance", {})
-        compliance_valid = citation_comp.get("compliance_passed", False)
-        checks.append(("Citation compliance & reference formatting passed", compliance_valid))
+        approved = set(ctx.get("approved_sources", []))
 
-        # Check 5: nothing fabricated - no synthesized references and novelty states its uncertainty
-        no_fabrication = not any("synth" in str(p.get("source", "")).lower() for p in reading_list) and \
+        # 1. every claim cites a real source: references are well-formed AND every drafted claim maps to a grounded one
+        by_num = {p.get("ref_num"): p for p in reading_list}
+        claims = ctx.get("claims", [])
+        claims_ok = all(c.get("ref") in by_num and by_num[c["ref"]].get("evidence", {}).get("grounded", True)
+                        for c in claims)
+        grounded = len(reading_list) > 0 and all("id" in p and "title" in p for p in reading_list) and claims_ok
+        checks.append(("grounded", "Every claim cites a real source (no fabricated citations)", grounded))
+
+        # 2. no reference is fabricated; novelty states its uncertainty
+        no_fab = not any("synth" in str(p.get("source", "")).lower() for p in reading_list) and \
             (not gap_analysis or "uncertainty" in gap_analysis or "novelty_flag" not in gap_analysis)
-        checks.append(("No fabricated references; novelty uncertainty stated", no_fabrication))
+        checks.append(("no_fabrication", "No fabricated references; novelty uncertainty stated", no_fab))
 
-        # Evaluate failing checks
-        failing = [name for name, passed in checks if not passed]
-        passed_all = len(failing) == 0
+        # 3. scope stays within approved corpora
+        scope_ok = bool(reading_list) and (not approved or all(p.get("source") in approved for p in reading_list))
+        checks.append(("scope", "Scope stays within approved corpora", scope_ok))
 
+        # 4. the draft is marked assistant-generated
+        marked = bool(sections) and all("AI-DRAFTED" in t for t in sections.values())
+        checks.append(("ai_marked", "The draft is marked assistant-generated", marked))
+
+        # supporting structural checks
+        gap_valid = bool(gap_analysis and ("novelty_flag" in gap_analysis or "why_our_work_is_unique" in gap_analysis))
+        checks.append(("gap", "Gap analysis evaluates topic novelty & uniqueness vs literature", gap_valid))
+        checks.append(("structure", "Draft structure contains all required sections", len(sections) >= 3))
+        compliance_valid = citation_comp.get("compliance_passed", False)
+        checks.append(("compliance", "Citation compliance & reference formatting passed", compliance_valid))
+
+        failing = [name for _, name, ok in checks if not ok]
+        passed_all = not failing
         detail = ""
         if not compliance_valid:
             errs = citation_comp.get("errors", [])
@@ -54,17 +61,17 @@ class ValidationAgent:
         report = {
             "passed": passed_all,
             "failing_checks": failing,
-            "passed_checks": [name for name, passed in checks if passed],
+            "failing_ids": [i for i, _, ok in checks if not ok],
+            "passed_checks": [name for _, name, ok in checks if ok],
             "diagnosis": "All validation gates passed cleanly." if passed_all else
             (f"Validation failures detected: {failing}.{detail}" +
              (f" Only {len(reading_list)} relevant source(s) were found - enable live academic APIs or broaden the topic."
-              if len(reading_list) < 5 else ""))
+              if len(reading_list) < 5 else "")),
         }
 
         print(f"Validation Result: Passed={report['passed']}")
-        for name, ok in checks:
-            status_str = "PASS" if ok else "FAIL"
-            print(f"  [{status_str}] {name}")
+        for _, name, ok in checks:
+            print(f"  [{'PASS' if ok else 'FAIL'}] {name}")
 
         return report
 

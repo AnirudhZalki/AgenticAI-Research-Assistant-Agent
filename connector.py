@@ -8,21 +8,59 @@ import time
 from typing import Dict, Any, List
 from search import SearchTools
 
+# Least-privilege scopes (agent-id prefix -> endpoints it may call). Used when auth_required=True.
+DEFAULT_SCOPES: Dict[str, List[str]] = {
+    "LiteratureDiscoveryAgent": ["read_paper_corpus", "search_online_papers"],
+    "DeepResearchAgent": ["read_paper_corpus", "search_online_papers"],
+    "SwarmWorker": ["read_paper_corpus", "read_funding_deadlines"],
+    "GapAnalysisAgent": ["read_researcher_library"],
+    "CitationComplianceAgent": ["read_researcher_library", "read_paper_corpus"],
+    "FundingRadarAgent": ["read_funding_deadlines"],
+    "RadarMonitor": ["read_funding_deadlines"],
+    "CollaborationAgent": ["read_collaboration_notes"],
+    "OpsProbe": ["search_online_papers"],
+    "StreamlitUser": ["*"],
+    "Coordinator": ["*"],
+}
+
+
 class ResearchDataConnector:
-    """Governed Model Context Protocol (MCP) style data connector server."""
-    
-    def __init__(self, search_tools: SearchTools = None):
+    """Governed Model Context Protocol (MCP) style data connector server.
+
+    When auth_required is True every endpoint call must come from a registered agent whose scope includes the
+    endpoint; anything else is refused (PermissionError) and the denial is written to the access log.
+    """
+
+    def __init__(self, search_tools: SearchTools = None, auth_required: bool = False,
+                 scopes: Dict[str, List[str]] = None):
         self._tools = search_tools if search_tools is not None else SearchTools()
         self.access_log: List[Dict[str, Any]] = []
+        self.auth_required = auth_required
+        self.scopes = dict(scopes if scopes is not None else DEFAULT_SCOPES)
+
+    def grant(self, agent_prefix: str, endpoints: List[str]):
+        self.scopes[agent_prefix] = list(endpoints)
+
+    def _authorized(self, agent_id: str, endpoint: str) -> bool:
+        if not self.auth_required:
+            return True
+        for prefix, eps in self.scopes.items():
+            if agent_id.startswith(prefix):
+                return "*" in eps or endpoint in eps
+        return False
 
     def _log_access(self, endpoint: str, params: Dict[str, Any], agent_id: str):
+        allowed = self._authorized(agent_id, endpoint)
         entry = {
             "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
             "agent_id": agent_id,
             "endpoint": endpoint,
-            "params": params
+            "params": params,
+            "decision": "ALLOWED" if allowed else "DENIED",
         }
         self.access_log.append(entry)
+        if not allowed:
+            raise PermissionError(f"Connector denied: '{agent_id}' has no scope for '{endpoint}'")
 
     def read_paper_corpus(self, keyword: str = "", agent_id: str = "AnonymousAgent") -> List[Dict[str, Any]]:
         """Governed endpoint: Read scholarly paper corpus (local JSON store)."""

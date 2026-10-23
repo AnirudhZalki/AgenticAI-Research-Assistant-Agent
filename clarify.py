@@ -9,6 +9,26 @@ class RequestClarifier:
         self.required_fields = ["topic", "venue", "collaborators", "deadline"]
         self.state = {}
 
+    def questions(self, inputs: dict = None) -> list:
+        """Clarifying questions the agent asks BEFORE planning (Lab 1): one per missing field, plus probes when the
+        request is vague. A vague request such as just 'GRU' always yields at least two questions."""
+        inputs = {k: str(v).strip() for k, v in (inputs or {}).items() if v and str(v).strip()}
+        qs = []
+        topic = inputs.get("topic", "")
+        if not topic:
+            qs.append("What research question or topic do you want to explore?")
+        elif len(topic.split()) < 4:
+            qs.append(f"'{topic}' is broad - which angle matters most (application domain, architecture comparison, "
+                      f"efficiency/hardware, theory)?")
+            qs.append(f"Which problem or dataset should '{topic}' be studied on, and what would count as a new contribution?")
+        if not inputs.get("venue"):
+            qs.append("Which venue is this for (conference/journal/grant), with its citation style and page limit?")
+        if not inputs.get("collaborators"):
+            qs.append("Who are the co-authors, and which sections does each own?")
+        if not inputs.get("deadline"):
+            qs.append("What is the submission or funding deadline (YYYY-MM-DD)?")
+        return qs
+
     def clarify(self, initial_inputs: dict = None, interactive: bool = True) -> dict:
         """
         Gathers required research parameters.
