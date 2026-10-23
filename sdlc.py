@@ -14,6 +14,7 @@ from typing import Any, Callable, Dict, List, Tuple
 
 from coordinator import ResearchCoordinator
 from governance import AuditLedger
+from healing import SelfHealer, inject_fault
 
 REQUEST = dict(topic="edge AI hardware porting frameworks", venue="IEEE conference, IMRAD, 6-page limit",
                collaborators="Faculty Author, Co-Author A", deadline="2026-11-15")
@@ -112,6 +113,49 @@ def t_parallel(r):
         "discovery, checks and export ran as PARALLEL stages"
 
 
+def t_heal(r):
+    c = _fresh()
+    c.build(REQUEST)
+    inject_fault(c, "fabricated_reference")
+    c.check()
+    rep = c.validate()
+    out = SelfHealer(c).heal(rep)
+    return (not rep["passed"]) and out["healed"] and bool(out["log"]), \
+        f"injected fabricated reference detected and repaired: {out['log'][0]['repair'][:60]}"
+
+
+def t_roles(r):
+    c = _fresh()
+    c.build(REQUEST)
+    return _raises(lambda: c.faculty_decision(True, "S", role="student_assistant"), PermissionError), \
+        "student role refused at the approval gate and the denial audited"
+
+
+def t_acceptance_gate(r):
+    c = _fresh()
+    c.build(REQUEST)
+    c.ctx["acceptance"]["all_pass"] = False
+    return _raises(lambda: c.faculty_decision(True, "Dr"), PermissionError), \
+        "approval blocked while the acceptance report is not fully passing"
+
+
+def t_connector(r):
+    c = _fresh()
+    return _raises(lambda: c.connector.read_collaboration_notes(agent_id="FundingRadarAgent"), PermissionError), \
+        "radar agent refused access to collaboration notes (least privilege)"
+
+
+def t_grounding(r):
+    c = _fresh()
+    c.intake(REQUEST)
+    pool = c.tools.corpus + [{"id": "X", "title": "Edge AI hardware porting rumour", "authors": ["A"], "abstract": "edge ai hardware porting",
+                              "keywords": [], "doi": "N/A", "source": "RandomBlog.example"}]
+    c.tools.read_corpus = lambda kw="": pool
+    c.discover()
+    return all(p["source"] != "RandomBlog.example" for p in c.ctx["reading_list"]) and bool(c.ctx["rejected_references"]), \
+        "out-of-scope candidate rejected by the grounding step"
+
+
 REQUIREMENTS: List[Tuple[str, str, str, str, Test]] = [
     ("REQ-01", "Do not start until topic, venue, collaborators and deadline are confirmed", "Workflow step 1 / Gate 1", "coordinator.intake", t_intake),
     ("REQ-02", "Ranked reading list from scholarly sources with links", "Workflow step 2", "specialist_agents.LiteratureDiscoveryAgent", t_reading),
@@ -125,6 +169,11 @@ REQUIREMENTS: List[Tuple[str, str, str, str, Test]] = [
     ("REQ-10", "Export logs versioned, source-linked, approved-status record", "Workflow step 9", "tracker.ResearchTracker", t_export),
     ("REQ-11", "Audit log is tamper-evident", "Governance layer", "governance.AuditLedger", t_ledger),
     ("REQ-12", "Independent agents run in parallel; gates stay sequential", "Hybrid methodology", "coordinator (RunnableParallel)", t_parallel),
+    ("REQ-13", "Validation failures are diagnosed and repaired in a targeted way (Lab 10)", "Chapter 12 Lab 10", "healing.SelfHealer", t_heal),
+    ("REQ-14", "Only authorised roles can approve; denials are audited (Lab 12)", "Chapter 12 Lab 12", "access.AccessControl", t_roles),
+    ("REQ-15", "No brief reaches approval without a passing acceptance report (Lab 11)", "Chapter 12 Lab 11", "coordinator.acceptance_suite", t_acceptance_gate),
+    ("REQ-16", "Agents reach data only through scoped connector endpoints (Lab 5)", "Chapter 12 Lab 5", "connector.ResearchDataConnector", t_connector),
+    ("REQ-17", "Ungrounded / out-of-scope candidates are rejected (Lab 9)", "Chapter 12 Lab 9", "specialist_agents.make_evidence", t_grounding),
 ]
 
 DESIGN = [

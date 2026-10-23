@@ -15,6 +15,8 @@ governance and the MCP tool layer:
   Stage 6 export            PARALLEL    Export & tracker version || checkpoint + ledger
 """
 
+import json
+import os
 import re
 import time
 from typing import Any, Callable, Dict, List, Optional
@@ -22,17 +24,21 @@ from typing import Any, Callable, Dict, List, Optional
 from langchain_core.runnables import RunnableLambda, RunnableParallel
 
 from clarify import RequestClarifier
+from access import AccessControl, Actor, classification
 from connector import ResearchDataConnector
 from deep_research import DeepResearchAgent
-from domain import parse_venue
+from domain import detect_domain, get_pack, parse_venue
+from healing import SelfHealer
 from governance import AuditLedger, Evaluator, GuardrailPolicy, dynamic_risks
 from langchain_orchestrator import LangChainOrchestrator
 from mcp_server import MCPServer
 from memory import MemoryStore
 from openclaw_runtime import OpenClawAgentRuntime
 from ops import CircuitBreaker, FaultInjector, OpsAgent, Tracer, instrument
+from radar import RadarMonitor
 from search import SearchTools
 from skills import FormattingSkill, ResearchPlanSkill
+from specialist_agents import DEFAULT_APPROVED_SOURCES
 from swarm import ParallelSwarm
 from tracker import ResearchTracker
 from verify import ValidationAgent
@@ -49,7 +55,7 @@ class ResearchCoordinator:
         if not use_live:
             tools.search_online = lambda query, max_results=6: []      # offline: corpus only
         self.tools = tools
-        self.connector = ResearchDataConnector(tools)
+        self.connector = ResearchDataConnector(tools, auth_required=True)   # least-privilege scopes (Lab 5)
         self.tracer, self.faults = Tracer(), FaultInjector()
         instrument(self.connector, self.tracer, self.faults, retries=retries, backoff_s=backoff_s,
                    breaker=CircuitBreaker(threshold=3, cooldown_s=5))
@@ -66,6 +72,10 @@ class ResearchCoordinator:
         self.approved = False
         self.ctx: Dict[str, Any] = {}
         self.blueprint = None
+        self.healer = SelfHealer(self)
+        self.metrics_history: List[Dict[str, Any]] = []
+        self.radar_monitor: Optional[RadarMonitor] = None
+        self.checkpoint_path = self.runtime.checkpoint_file
 
     # ---------------------------------------------------------------- helpers
     def _log(self, intent: str, action: str, result: Any = "", status: str = "SUCCESS"):
@@ -76,6 +86,8 @@ class ResearchCoordinator:
         t0 = time.time()
         out = fn()
         self.timeline.append({"stage": name, "mode": mode, "seconds": round(time.time() - t0, 3)})
+        self.ctx.setdefault("stages_done", []).append(name)
+        self.runtime.checkpoint(session_state=self.ctx)        # checkpoint after every stage (resume point)
         return out
 
     def _parallel(self, branches: Dict[str, Callable], ctx: Dict[str, Any], take: Dict[str, List[str]]) -> Dict[str, Any]:
@@ -94,8 +106,11 @@ class ResearchCoordinator:
             raise ValueError(f"Gate 1 blocked: faculty must confirm {missing} before any work starts.")
         if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", request["deadline"].strip()):
             raise ValueError("Gate 1 blocked: deadline must be YYYY-MM-DD.")
-        state = RequestClarifier().clarify(initial_inputs=request, interactive=False)
+        state = RequestClarifier().clarify(initial_inputs={k: request[k] for k in REQUIRED}, interactive=False)
         self.ctx = dict(state)
+        self.ctx["approved_sources"] = list(DEFAULT_APPROVED_SOURCES)
+        self.ctx["domain"] = request.get("domain") or detect_domain(state["topic"])
+        self.ctx["stages_done"] = []
         self.ctx["prior_tasks"] = self.memory.retrieve_prior_tasks(state["topic"])
         self.memory.update_session("clarified_state", state)
         self._log("Gate 1: Intake", "RequestClarifier", state)
@@ -104,6 +119,12 @@ class ResearchCoordinator:
     # ------------------------------------------------------------------- plan
     def plan(self) -> Any:
         self.blueprint = ResearchPlanSkill().execute(self.ctx)
+        pack = get_pack(self.ctx.get("domain"))
+        names = [x.split(". ", 1)[-1] for x in self.blueprint.sections]
+        for extra in pack.extra_sections:                       # domain pack plugs its required sections into the plan
+            if extra not in names:
+                names.insert(max(len(names) - 1, 0), extra)
+        self.blueprint.sections = [f"{i}. {n}" for i, n in enumerate(names, 1)]
         self.ctx["plan_sections"] = list(self.blueprint.sections)
         self.memory.update_session("active_plan", self.blueprint)
         self._log("Plan", "ResearchPlanSkill", self.blueprint.title)
@@ -130,7 +151,7 @@ class ResearchCoordinator:
             self._parallel(
                 {"lit": lambda c: self.orch.lit_agent.step(c, self.connector),
                  "radar": lambda c: self.orch.radar_agent.step(c, self.connector)},
-                self.ctx, {"lit": ["reading_list", "literature_warnings"], "radar": ["radar_deadlines"]})
+                self.ctx, {"lit": ["reading_list", "literature_warnings", "rejected_references"], "radar": ["radar_deadlines"]})
         self._stage("Discovery (swarm + literature || radar)", "PARALLEL", run)
         self._log("Literature Discovery", "Swarm + ranked reading list (MCP)", len(self.ctx.get("reading_list", [])))
         self._log("Funding Radar", "Deadlines & CFPs (MCP)", len(self.ctx.get("radar_deadlines", [])))
@@ -175,6 +196,26 @@ class ResearchCoordinator:
         self._log("Validation", "Acceptance gate", rep["diagnosis"], "PASS" if rep["passed"] else "FAIL")
         return rep
 
+    def generate_and_validate(self, max_attempts: int = 3) -> Dict[str, Any]:
+        """Draft once, check, validate; on failure SELF-HEAL (repair only the failing part) within a bounded budget,
+        and escalate to the human with a diagnosis if it cannot be repaired."""
+        self.ctx.pop("escalation", None)
+        self.draft()
+        self.check()
+        rep = self.validate()
+        rep["attempts"] = 1
+        if not rep["passed"]:
+            out = self.healer.heal(rep)
+            rep = out["report"]
+            rep["attempts"] = 1 + out["attempts"]
+            rep["heal_log"] = out["log"]
+            self._log("Self-healing", f"{len(out['log'])} targeted repair(s)",
+                      "healed" if out["healed"] else "ESCALATED to faculty", "SUCCESS" if out["healed"] else "ESCALATED")
+            if out["escalated"]:
+                rep["stopped_early"] = "Could not be repaired automatically - escalated to the faculty with a diagnosis."
+            self.ctx["validation"] = rep
+        return rep
+
     def assemble(self) -> str:
         """Format the validated draft (with attributed co-author notes) for faculty review."""
         sections = dict(self.ctx.get("draft_sections", {}))
@@ -189,24 +230,116 @@ class ResearchCoordinator:
             "sections": sections, "references": refs}, venue_spec=spec.citation_style)
         self.ctx["formatted_paper"] = text
         self.memory.update_session("current_draft", text)
+        self.ctx["acceptance"] = self.acceptance_suite()
         return text
 
+    # ----------------------------------------------- Lab 11: acceptance suite gates the human review
+    def acceptance_suite(self) -> Dict[str, Any]:
+        ctx = self.ctx
+        refs = ctx.get("reading_list", [])
+        gr = {g["guardrail"].split(" ")[0]: g for g in self.policy.evaluate(ctx, self.runtime, self.tracker)}
+        cc = ctx.get("citation_compliance", {})
+        checks = [
+            ("AC1", "Validation gate passed", bool(ctx.get("validation", {}).get("passed")), ctx.get("validation", {}).get("diagnosis", "")),
+            ("AC2", ">=5 references, each with a grounded, in-scope evidence record",
+             len(refs) >= 5 and all(p.get("evidence", {}).get("grounded") for p in refs), f"{len(refs)} references"),
+            ("AC3", "Guardrails G1, G3, G5, G6, G7 hold",
+             all(gr[k]["passed"] for k in ("G1", "G3", "G5", "G6", "G7")), "; ".join(f"{k}:{gr[k]['passed']}" for k in ("G1", "G3", "G5", "G6", "G7"))),
+            ("AC4", "Draft sections equal the confirmed outline",
+             list(ctx.get("draft_sections", {})) == list(ctx.get("confirmed_outline", [])), "outline-first"),
+            ("AC5", "Every radar alert is timestamped", bool(ctx.get("radar_deadlines")) and all("checked_at" in d for d in ctx["radar_deadlines"]), f"{len(ctx.get('radar_deadlines', []))} alerts"),
+            ("AC6", "No unresolved escalation", "escalation" not in ctx, "none" if "escalation" not in ctx else ctx["escalation"]["reason"][:120]),
+            ("AC7", "Domain pack sections present (" + get_pack(ctx.get("domain")).name + ")",
+             all(d["status"] != "MISSING_SECTION" for d in cc.get("domain_checks", [])), f"{len(cc.get('domain_checks', []))} domain rule(s)"),
+            ("AC8", "Zero citation errors", not cc.get("errors"), f"{len(cc.get('errors', []))} error(s)"),
+        ]
+        rows = [{"id": i, "criterion": n, "result": "PASS" if ok else "FAIL", "evidence": e} for i, n, ok, e in checks]
+        return {"checks": rows, "all_pass": all(ok for _, _, ok, _ in checks)}
+
+    def build(self, request: Dict[str, str], outline: Optional[List[str]] = None, max_attempts: int = 3) -> Dict[str, Any]:
+        """The chapter's 'build' command: plan -> research brief + acceptance report (never skips straight to the human)."""
+        self.intake(request)
+        bp = self.plan()
+        self.confirm_outline(outline or bp.sections)
+        self.discover()
+        self.deep_research()
+        self.analyze_gap()
+        rep = self.generate_and_validate(max_attempts)
+        if rep["passed"]:
+            self.assemble()
+        return {"ctx": self.ctx, "validation": rep, "acceptance": self.ctx.get("acceptance"),
+                "ready_for_review": bool(self.ctx.get("acceptance", {}).get("all_pass"))}
+
     # --------------------------------------------------- Gate 3: faculty review
-    def faculty_decision(self, approve: bool, approver: str = "Faculty Examiner", comments: str = ""):
+    def faculty_decision(self, approve: bool, approver: str = "Faculty Examiner", comments: str = "",
+                         role: str = "faculty"):
+        actor = Actor(approver, role)
+        action = "approve" if approve else "reject"
+        try:
+            AccessControl.require(actor, action)
+        except PermissionError as exc:
+            self.ledger.append(approver, f"DENIED {action}", str(exc), "DENIED")
+            self.runtime.log_audit_step("Human Gate", "Access control", str(exc), status="DENIED")
+            raise
         if not self.ctx.get("formatted_paper"):
             raise RuntimeError("Nothing to review yet.")
-        if approve and not self.ctx.get("validation", {}).get("passed"):
-            raise PermissionError("Cannot approve a draft that failed the validation gate.")
+        if approve:
+            acc = self.ctx.get("acceptance") or self.acceptance_suite()
+            if not acc["all_pass"]:
+                raise PermissionError("No research brief advances without a fully passing acceptance report: "
+                                      + ", ".join(c["id"] for c in acc["checks"] if c["result"] == "FAIL"))
         self.approved = approve
         status = "APPROVED" if approve else "REJECTED"
         self.runtime.log_audit_step("Human Gate: Publish Formatted Research Paper", "Faculty Review",
-                                    f"{status} by {approver}. {comments}".strip(), status=status)
+                                    f"{status} by {approver} ({role}). {comments}".strip(), status=status)
         self.ledger.append(approver, "Faculty Review", comments or status, status)
         if approve:
             self.ctx["approved_by"] = approver
         else:
             self.ctx["faculty_feedback"] = comments
             self.runtime.state["status"] = "STOPPED_AT_FACULTY_GATE"
+
+    def rollback(self, version: str, approver: str = "Faculty Examiner", role: str = "faculty", reason: str = ""):
+        actor = Actor(approver, role)
+        try:
+            AccessControl.require(actor, "rollback")
+        except PermissionError as exc:
+            self.ledger.append(approver, "DENIED rollback", str(exc), "DENIED")
+            raise
+        rb = self.tracker.rollback(version, reason or "rollback")
+        if rb:
+            self.ledger.append(approver, "Rollback", f"{version} -> {rb['version']}")
+        return rb
+
+    def classification(self) -> str:
+        return classification(self.ctx)
+
+    # ------------------------------------------------------------- Lab 6: crash recovery
+    def resume(self) -> str:
+        """Restore the last checkpoint (run state, audit log and the working context) after a crash/restart."""
+        if not os.path.exists(self.checkpoint_path):
+            return ""
+        self.runtime.resume_from_checkpoint()
+        with open(self.checkpoint_path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        ctx = data.get("session_state") or {}
+        if not ctx.get("topic"):
+            return ""
+        self.ctx = ctx
+        self.blueprint = ResearchPlanSkill().execute(ctx)
+        self.blueprint.sections = list(ctx.get("plan_sections", self.blueprint.sections))
+        self.approved = bool(ctx.get("approved_by"))
+        return ("export" if ctx.get("export_status") else "review" if ctx.get("formatted_paper") else
+                "draft" if ctx.get("reading_list") else "outline" if ctx.get("confirmed_outline") else "plan")
+
+    # ---------------------------------------------------- continuous radar
+    def start_radar(self, interval_s: float = 3600.0) -> RadarMonitor:
+        if self.radar_monitor is None:
+            self.radar_monitor = RadarMonitor(self.connector, self.ctx.get("topic", ""), self.ctx.get("deadline", ""), interval_s)
+        else:
+            self.radar_monitor.interval_s = interval_s
+        self.radar_monitor.start()
+        return self.radar_monitor
 
     # -------------------------------------------------------- Stage 6: export
     def export(self) -> Dict[str, Any]:
@@ -236,28 +369,19 @@ class ResearchCoordinator:
 
     # ------------------------------------------------------- one-shot run
     def run_all(self, request: Dict[str, str], approve: bool = True, approver: str = "Faculty Examiner",
-                outline: Optional[List[str]] = None, max_retries: int = 2) -> Dict[str, Any]:
-        self.intake(request)
-        bp = self.plan()
-        self.confirm_outline(outline or bp.sections)
-        self.discover()
-        self.deep_research()
-        self.analyze_gap()
-        rep = {"passed": False}
-        for attempt in range(1, max_retries + 2):
-            self.draft()
-            self.check()
-            rep = self.validate()
-            if rep["passed"]:
-                break
-            self.ctx["retry_count"] = attempt
-        result = {"ctx": self.ctx, "validation": rep}
-        if rep["passed"]:
-            self.assemble()
-            self.faculty_decision(approve, approver, "" if approve else "Rejected in automated run")
+                outline: Optional[List[str]] = None, max_retries: int = 2, role: str = "faculty") -> Dict[str, Any]:
+        built = self.build(request, outline, max_retries + 1)
+        rep = built["validation"]
+        result = {"ctx": self.ctx, "validation": rep, "acceptance": built["acceptance"]}
+        if built["ready_for_review"]:
+            self.faculty_decision(approve, approver, "" if approve else "Rejected in automated run", role)
             if approve:
                 self.export()
         result["governance"] = self.governance_report()
         result["metrics"] = result["governance"]["metrics"]
         result["timeline"] = self.timeline
+        self.metrics_history.append({"time": time.strftime("%H:%M:%S"), "topic": self.ctx["topic"],
+                                     "score": result["metrics"]["overall_score"],
+                                     "validation": result["metrics"]["validation_passed"],
+                                     "guardrails": result["metrics"]["guardrails_passed"]})
         return result

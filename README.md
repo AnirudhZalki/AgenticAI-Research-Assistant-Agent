@@ -47,11 +47,11 @@ This repository contains the complete implementation of the **Research Assistant
 | 7 | Specialist agent graph on LangChain runnables + validation gate + bounded retry | `specialist_agents.py`, `langchain_orchestrator.py`, `node_graph.py`, `verify.py` |
 | 8 | Parallel swarm fan-out / fan-in merge | `swarm.py` |
 | 9 | Deep research: iterative retrieval, evidence table, cited briefing | `deep_research.py` |
-| 10 | Cloud-ops style observability: traces, retry/backoff, circuit breaker, fault injection, diagnosis | `ops.py` |
-| 11 | Agentic SDLC: 12 requirements → acceptance tests → traceability matrix | `sdlc.py` |
-| 12 | Governance: 7 executable guardrails, hash-chained audit ledger, risk register, evaluation, rollback | `governance.py`, `tracker.py` |
-| 13 | Discipline agent (CSE/AI publishing): venue parser, IEEE/ACM/APA/BibTeX, originality screen | `domain.py` |
-| 14 | Capstone coordinator with the proposal's hybrid sequential/parallel methodology | `coordinator.py`, `research_agent.py`, `app.py` |
+| 10 | Self-healing validation (targeted repair, bounded retries, escalation) + API resilience (traces, retry, circuit breaker) | `healing.py`, `ops.py` |
+| 11 | Agentic SDLC: 17 requirements → acceptance tests → traceability matrix; acceptance report gates human review | `sdlc.py`, `coordinator.acceptance_suite` |
+| 12 | Governance: roles & confidentiality, 7 guardrails, hash-chained audit ledger, risk register, evaluation, rollback | `access.py`, `governance.py`, `tracker.py` |
+| 13 | Pluggable domain packs (CS/AI, Biosciences, Materials) with checkable rules; venue parser, IEEE/ACM/APA/BibTeX, originality screen | `domain.py` |
+| 14 | Capstone coordinator with the proposal's hybrid sequential/parallel methodology, dashboard, continuous radar | `coordinator.py`, `radar.py`, `research_agent.py`, `app.py` |
 
 ### Proposal guardrails and where they are enforced
 | Guardrail | Enforcement |
@@ -98,6 +98,10 @@ AgenticAI-Research-Assistant-Agent/
 ├── governance.py            # Lab 12
 ├── domain.py                # Lab 13
 ├── tracker.py               # Version history / repository
+├── healing.py               # Lab 10: self-healing + fault injection
+├── access.py                # Lab 12: roles & confidentiality
+├── radar.py                 # Continuous funding/journal radar monitor
+├── docs/LAB_EVIDENCE_6-14.md# Review-sheet text aligned to Chapter 12
 ├── main.py                  # End-to-End Multi-Framework Orchestrator
 ├── run_labs.py              # Automated test runner for Labs 1 through 8
 └── README.md                # System documentation & execution guide
@@ -146,7 +150,7 @@ test_lab_12_safety_governance ... ok
 test_lab_13_domain_agent ... ok
 test_lab_14_capstone_end_to_end ... ok
 ----------------------------------------------------------------------
-Ran 14 tests
+Ran 25 tests
 
 OK
 ```

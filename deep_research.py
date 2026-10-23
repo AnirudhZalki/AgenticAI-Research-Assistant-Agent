@@ -13,7 +13,8 @@ import re
 from collections import Counter
 from typing import Any, Dict, List
 
-from specialist_agents import ABBREV, expand_query, relevance, terms
+from specialist_agents import (ABBREV, DEFAULT_APPROVED_SOURCES, expand_query, make_evidence, relevance, terms,
+                               year_of, strip_cites)
 
 
 def _sentences(text: str) -> List[str]:
@@ -35,7 +36,7 @@ class DeepResearchAgent:
             found += self.connector.read_paper_corpus(w, agent_id="DeepResearchAgent")
         return [p for p in found if relevance(query, p) > 0]   # drop papers sharing no topic term
 
-    def run(self, topic: str, use_online: bool = True) -> Dict[str, Any]:
+    def run(self, topic: str, use_online: bool = True, approved_sources=None) -> Dict[str, Any]:
         papers: Dict[str, Dict[str, Any]] = {}
         trace, query = [], topic
         used_queries = set()
@@ -66,7 +67,18 @@ class DeepResearchAgent:
         else:
             trace[-1]["stop_reason"] = "max rounds reached"
 
-        ranked = sorted(papers.values(), key=lambda p: (relevance(topic, p), p.get("year", 0)), reverse=True)
+        approved = list(approved_sources or DEFAULT_APPROVED_SOURCES)
+        rejected, grounded = [], {}
+        for key, p in papers.items():             # grounding: ungrounded or out-of-scope candidates are rejected
+            ev = make_evidence(p, topic, approved)
+            if ev["grounded"]:
+                p["evidence"] = ev
+                grounded[key] = p
+            else:
+                rejected.append({"title": p.get("title"), "source": p.get("source"),
+                                 "reason": "out of approved scope" if not ev["in_scope"] else "no abstract or DOI"})
+        papers = grounded
+        ranked = sorted(papers.values(), key=lambda p: (relevance(topic, p), year_of(p)), reverse=True)
         refs = []
         for i, p in enumerate(ranked[:10], 1):
             refs.append({**p, "ref_num": i, "relevance": relevance(topic, p)})
@@ -108,7 +120,10 @@ class DeepResearchAgent:
         if any("mock" in p["source"] for p in refs):
             limits.append("Includes MOCK-corpus entries: do not cite them in a real submission.")
         gaps = [w for w in terms(topic) if sum(1 for p in refs if w in (p.get("title", "") + p.get("abstract", "")).lower()) <= 1]
-        return {"topic": topic, "trace": trace, "references": refs, "evidence_table": evidence,
+        for e, p in zip(evidence, refs):
+            e["scope"] = p["evidence"]["scope"]
+            e["tags"] = ", ".join(p["evidence"]["tags"][:4])
+        return {"topic": topic, "trace": trace, "references": refs, "evidence_table": evidence, "rejected": rejected,
                 "themes": top_themes, "briefing_markdown": "\n".join(lines),
                 "limitations": limits, "evidence_gaps": gaps,
                 "stopped_because": trace[-1].get("stop_reason", "")}

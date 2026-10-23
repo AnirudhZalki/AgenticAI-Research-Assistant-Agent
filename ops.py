@@ -111,6 +111,9 @@ def instrument(connector, tracer: Tracer, faults: Optional[FaultInjector] = None
                     res = fn(*args, **kwargs)
                     tracer.record(name, started, "OK")
                     return res
+                except PermissionError as exc:
+                    tracer.record(name, started, "DENIED", str(exc))
+                    raise
                 except Exception as exc:
                     tracer.record(name, started, "ERROR", str(exc))
                     raise
@@ -127,6 +130,9 @@ def instrument(connector, tracer: Tracer, faults: Optional[FaultInjector] = None
                     breaker.success()
                     tracer.record(name, t0, "OK", attempt=attempt)
                     return res
+                except PermissionError as exc:           # an authorization refusal is never retried or masked
+                    tracer.record(name, t0, "DENIED", str(exc), attempt=attempt)
+                    raise
                 except Exception as exc:
                     last = str(exc)
                     breaker.failure()

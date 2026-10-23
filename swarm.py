@@ -117,6 +117,34 @@ class ParallelSwarm:
         merged_result["swarm_wall_clock_time_sec"] = total_swarm_wall_time
         return merged_result
 
+    def benchmark(self, subqueries: List[str], main_topic: str, simulated_latency_s: float = 0.0) -> Dict[str, Any]:
+        """Lab 8 acceptance: parallel matches the quality of sequential at lower wall-clock time.
+        simulated_latency_s emulates per-call network latency (offline corpus reads take microseconds)."""
+        import io, contextlib
+
+        def work(i_sq):
+            i, sq = i_sq
+            if simulated_latency_s:
+                time.sleep(simulated_latency_s)
+            return SwarmWorker(f"B{i + 1}", self.mcp_server).process_subquery(sq)
+        quiet = contextlib.redirect_stdout(io.StringIO())
+        with quiet:
+            t0 = time.time()
+            seq = [work(x) for x in enumerate(subqueries)]
+            t_seq = time.time() - t0
+            t0 = time.time()
+            with concurrent.futures.ThreadPoolExecutor(max_workers=len(subqueries)) as ex:
+                par = list(ex.map(work, enumerate(subqueries)))
+            t_par = time.time() - t0
+            m_seq = self.merger.merge(seq, main_topic)
+            m_par = self.merger.merge(par, main_topic)
+        same = [p["id"] for p in m_seq["consolidated_papers"]] == [p["id"] for p in m_par["consolidated_papers"]]
+        return {"sequential_s": round(t_seq, 4), "parallel_s": round(t_par, 4),
+                "speedup": round(t_seq / t_par, 2) if t_par else None,
+                "same_merged_result": same, "simulated_latency_s": simulated_latency_s,
+                "accepted": same and t_par <= t_seq}
+
+
 if __name__ == "__main__":
     swarm = ParallelSwarm()
     sub_qs = ["edge AI", "microcontroller", "hardware porting", "benchmarking"]
