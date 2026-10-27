@@ -58,8 +58,10 @@ class CitationFormatter:
 
     @staticmethod
     def _authors(p: Dict[str, Any]) -> List[str]:
+        """Author names with blanks/None removed (real API records often contain empty author entries)."""
         a = p.get("authors") or []
-        return a if isinstance(a, list) else [str(a)]
+        a = a if isinstance(a, list) else [str(a)]
+        return [str(x).strip() for x in a if x and str(x).strip()]
 
     @staticmethod
     def _initials(name: str) -> str:
@@ -88,7 +90,9 @@ class CitationFormatter:
     def to_bibtex(self, refs: List[Dict[str, Any]]) -> str:
         out = []
         for i, p in enumerate(refs, 1):
-            key = re.sub(r"\W", "", (self._authors(p) or ["ref"])[0].split()[-1]) + str(p.get("year", "")) + f"_{i}"
+            first = (self._authors(p) or ["ref"])[0].split()
+            year = re.search(r"\d{4}", str(p.get("year") or ""))
+            key = re.sub(r"\W", "", first[-1] if first else "ref") + (year.group() if year else "nd") + f"_{i}"
             out.append(
                 f"@inproceedings{{{key},\n  author = {{{' and '.join(self._authors(p))}}},\n"
                 f"  title = {{{p.get('title', '')}}},\n  booktitle = {{{p.get('venue', '')}}},\n"

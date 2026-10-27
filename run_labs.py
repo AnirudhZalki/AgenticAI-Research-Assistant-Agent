@@ -406,6 +406,19 @@ class TestResearchAgentLabs(unittest.TestCase):
         self.assertLessEqual(i2["pages"], 8)
         print("  [PASS] Paper length: typeset PDF fits the venue page range with transparent reserved space.")
 
+    def test_bibtex_and_formatting_survive_messy_records(self):
+        """Real API records can have blank authors, None years or missing venues; formatting must not crash."""
+        messy = [{"title": "T1", "authors": [""], "year": None, "venue": None, "doi": None},
+                 {"title": "T2", "authors": ["  ", None, "A. B"], "year": "n.d.", "doi": "N/A"},
+                 {"title": "T3", "authors": [], "year": 2023, "venue": "V"},
+                 {"title": "T4", "authors": "Single Author", "year": "2021"}]
+        f = CitationFormatter()
+        bib = f.to_bibtex(messy)
+        self.assertEqual(bib.count("@inproceedings"), 4)
+        for style in ("IEEE", "ACM", "APA"):
+            self.assertEqual(len(f.format_all(messy, style)), 4)
+        print("  [PASS] Citation formatting and BibTeX tolerate messy API records.")
+
 def run_all_tests():
     print("==========================================================================")
     print("      AUTOMATED VERIFICATION SUITE (LANGCHAIN + OPENCLAW + MCP LABS 1 - 14)")
