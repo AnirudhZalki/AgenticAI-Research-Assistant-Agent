@@ -244,7 +244,8 @@ class LiteratureDiscoveryAgent:
             summarized.append({
                 "ref_num": idx, "id": p.get("id", f"REF_{idx}"), "title": p.get("title", "Untitled"),
                 "year": year_of(p) or "n.d.", "venue": p.get("venue", "Unknown Venue"),
-                "authors": p.get("authors") or ["Unknown"],
+                "authors": ([str(x).strip() for x in (p.get("authors") if isinstance(p.get("authors"), list) else [p.get("authors")])
+                             if x and str(x).strip()] or ["Unknown"]),
                 "summary": (strip_cites(clean_text(p.get("abstract") or "")) if looks_english(clean_text(p.get("abstract") or ""))
                             else "No English abstract available.") or "No abstract available.",
                 "keywords": p.get("keywords", []), "doi": doi,
