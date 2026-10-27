@@ -44,7 +44,7 @@ class AccessControl:
     @staticmethod
     def matrix() -> List[Dict[str, Any]]:
         actions = sorted({a for r in ROLES.values() for a in r["can"]})
-        return [{"action": a, **{r: ("✔" if a in v["can"] else "—") for r, v in ROLES.items()}} for a in actions]
+        return [{"action": a, **{r: ("yes" if a in v["can"] else "-") for r, v in ROLES.items()}} for a in actions]
 
 
 def classification(ctx: Dict[str, Any]) -> str:

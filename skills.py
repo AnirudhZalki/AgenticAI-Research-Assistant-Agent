@@ -7,7 +7,7 @@ Packages repeatable capabilities into schema-typed skills.
 
 from dataclasses import dataclass, field
 from typing import List, Dict, Any
-from domain import parse_venue
+from domain import parse_venue, smart_title
 
 @dataclass
 class PlanBlueprint:
@@ -38,7 +38,7 @@ class ResearchPlanSkill:
         sections = [f"{i}. {name}" for i, name in enumerate(spec.sections, 1)]
 
         bp = PlanBlueprint(
-            title=f"A Systematic Investigation into {topic.title()}",
+            title=f"A Systematic Investigation into {smart_title(topic)}",
             venue=venue,
             deadline=deadline,
             collaborators=collaborators,

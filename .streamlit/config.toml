@@ -1,0 +1,13 @@
+# Light and dark themes are both defined; the viewer picks in the app menu (top right) > Settings > Theme
+# ("Use system setting" follows the operating system). Nothing in the app forces a theme.
+[theme.light]
+primaryColor = "#1d4ed8"
+backgroundColor = "#ffffff"
+secondaryBackgroundColor = "#f1f5f9"
+textColor = "#0f172a"
+
+[theme.dark]
+primaryColor = "#60a5fa"
+backgroundColor = "#0e1117"
+secondaryBackgroundColor = "#1a2030"
+textColor = "#e5e7eb"

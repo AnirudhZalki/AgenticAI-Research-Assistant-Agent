@@ -3,3 +3,4 @@ pandas
 langchain-core
 mcp
 openclaw
+reportlab
