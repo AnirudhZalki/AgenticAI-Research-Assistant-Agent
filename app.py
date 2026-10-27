@@ -19,7 +19,7 @@ import sys
 import streamlit as st
 
 # Preflight: give a clear fix instead of a raw ImportError traceback.
-_DEPS = {"langchain_core": "langchain-core", "mcp": "mcp", "openclaw": "openclaw", "pandas": "pandas"}
+_DEPS = {"langchain_core": "langchain-core", "mcp": "mcp", "openclaw": "openclaw", "pandas": "pandas", "reportlab": "reportlab"}
 _missing = [pkg for mod, pkg in _DEPS.items() if importlib.util.find_spec(mod) is None]
 if _missing:
     st.set_page_config(page_title="Research Assistant Agent")
@@ -185,6 +185,7 @@ with t_flow:
                 try:
                     C.intake(S.params)          # starts a fresh context for this topic
                     clear_topic_state()
+                    S.pg_lo, S.pg_hi = C.ctx["page_range"]
                     C.plan()
                     S.outline_draft = list(C.blueprint.sections)
                     go(1)
@@ -285,6 +286,12 @@ with t_flow:
         retries = st.slider("Bounded regenerate attempts", 1, 4, 2)
         can_see = AccessControl.can(ACTOR, "view_confidential")
         can_edit = AccessControl.can(ACTOR, "edit_draft")
+        pr = C.ctx.get("page_range", [6, 8])
+        S.setdefault("pg_lo", pr[0]); S.setdefault("pg_hi", pr[1])
+        pc1, pc2 = st.columns(2)
+        pc1.number_input("Minimum pages", 1, 40, key="pg_lo", help="Paper is fitted to this page range (default from the venue)")
+        pc2.number_input("Maximum pages", 1, 40, key="pg_hi")
+        C.ctx["page_range"] = [int(S.pg_lo), int(max(S.pg_hi, S.pg_lo))]
         if not can_see:
             st.warning(" Unpublished drafts are confidential. Your role sees validation status only.")
         if st.button("Analyze, draft & check", type="primary", disabled=not AccessControl.can(ACTOR, "run_pipeline")):
@@ -313,6 +320,13 @@ with t_flow:
                 st.error("**Escalated to the faculty** — " + C.ctx["escalation"]["reason"])
                 for a_ in C.ctx["escalation"]["suggested_actions"]:
                     st.write("• " + a_)
+            pi = C.ctx.get("paper_info")
+            if pi:
+                m1, m2, m3 = st.columns(3)
+                m1.metric("Paper length", f"{pi['pages']} pages", help=f"Target range {pi['min']}-{pi['max']} pages (exact, typeset)")
+                m2.metric("Evidence-based pages", pi["evidence_pages"])
+                m3.metric("Reserved for authors", pi["reserved_pages"], help="Empty, labelled boxes for the authors' own figures, methods and results")
+                (st.success if pi["status"] == "IN RANGE" else st.warning)(pi["note"])
             acc = C.ctx.get("acceptance")
             if acc:
                 with st.expander(f"Acceptance report — {'ALL PASS' if acc['all_pass'] else 'NOT PASSING'} "
@@ -390,6 +404,13 @@ with t_flow:
             (st.success if acc["all_pass"] else st.error)(
                 "Acceptance report: " + ("ALL PASS — eligible for faculty review" if acc["all_pass"] else "NOT PASSING — approval is blocked"))
         view = redact_view(C.ctx, ACTOR)
+        pi = C.ctx.get("paper_info")
+        if pi:
+            st.caption(f"Typeset paper: {pi['pages']} pages (target {pi['min']}-{pi['max']}), "
+                       f"{pi['reserved_pages']} page(s) reserved for the authors' own content.")
+        if AccessControl.can(ACTOR, "view_confidential") or C.ctx.get("export_status") == "READY_FOR_PUBLICATION":
+            st.download_button("Download paper (IEEE-style PDF)", C.paper_pdf or (C.render_paper() and C.paper_pdf),
+                               "research_paper_draft.pdf", mime="application/pdf")
         st.code(view["formatted_paper"], language="text")
         if S.get("decision") is None:
             st.write(f"Acting as **{S.user}** ({ROLES[S.role]['label']}). Only the faculty role may approve.")
@@ -462,6 +483,9 @@ with t_dash:
         k2.metric("Validation", "—" if "validation" not in C.ctx else ("PASS" if C.ctx["validation"]["passed"] else "FAIL"))
         k3.metric("Acceptance", "—" if not acc else ("ALL PASS" if acc["all_pass"] else "BLOCKED"))
         k4.metric("Version", C.ctx.get("version", "draft"))
+        if C.ctx.get("paper_info"):
+            st.caption(f"Typeset paper: {C.ctx['paper_info']['pages']} pages ({C.ctx['paper_info']['status'].lower()}, "
+                       f"target {C.ctx['paper_info']['min']}-{C.ctx['paper_info']['max']}).")
         left, right = st.columns(2)
         with left:
             st.markdown("#### Reading list & gap")

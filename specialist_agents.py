@@ -116,6 +116,89 @@ def first_sentence(text: str, limit: int = 240) -> str:
     return s if len(s) <= limit else s[:limit].rsplit(" ", 1)[0] + "..."
 
 
+def clean_text(t: str) -> str:
+    """Strip XML/JATS tags and entities that scholarly APIs leave in abstracts."""
+    import html
+    return re.sub(r"\s+", " ", html.unescape(re.sub(r"<[^>]+>", " ", t or ""))).strip()
+
+
+_EN_WORDS = set("the of and to in a is for on with that this are as by an be from we our which can it at or was have "
+                "has been using results show based into their these".split())
+
+
+def looks_english(t: str) -> bool:
+    w = re.findall(r"[a-z']+", (t or "").lower())
+    return len(w) < 12 or sum(x in _EN_WORDS for x in w) / len(w) >= 0.12
+
+
+def sentences(text: str, k: int = 1) -> str:
+    parts = [x.strip() for x in re.split(r"(?<=[.!?])\s+", clean_text(text)) if len(x.strip()) > 25]
+    return " ".join(parts[:k])
+
+
+METRIC_WORDS = ["latency", "throughput", "accuracy", "energy", "memory", "sram", "power", "precision", "recall",
+                "f1", "speedup", "bandwidth", "robustness", "convergence", "perplexity", "error", "cost", "scalability"]
+
+
+def analyze_literature(ctx: Dict[str, Any]) -> Dict[str, Any]:
+    """Facts derived only from the retrieved papers: years, venues, recurring themes, metrics, term coverage."""
+    from collections import Counter
+    refs = [p for p in ctx.get("reading_list", [])]
+    tset = set(terms(ctx.get("topic", "")))
+    years = [year_of(p) for p in refs if year_of(p)]
+    venues = [v for v, _ in Counter(p["venue"] for p in refs if p.get("venue") and "Unknown" not in p["venue"]).most_common(3)]
+    cnt: Counter = Counter()
+    for p in refs:
+        for w in set(terms(_paper_text(p))):
+            if w not in tset and len(w) > 4:
+                cnt[w] += 1
+    theme_terms = [w for w, c in cnt.most_common(12) if c >= 2][:4]
+    themes = {w: [] for w in theme_terms}
+    other = []
+    for p in refs:
+        words = set(terms(_paper_text(p)))
+        hits = [w for w in theme_terms if w in words]
+        if hits:
+            themes[max(hits, key=lambda w: cnt[w])].append(p["ref_num"])
+        else:
+            other.append(p["ref_num"])
+    metrics = {m: [p["ref_num"] for p in refs if re.search(rf"\b{m}\b", _paper_text(p))] for m in METRIC_WORDS}
+    metrics = {m: r for m, r in metrics.items() if r}
+    return {"n": len(refs), "years": (min(years), max(years)) if years else None, "venues": venues,
+            "themes": {k: v for k, v in themes.items() if v}, "other": other, "metrics": metrics,
+            "coverage": ctx.get("gap_analysis", {}).get("term_coverage", {})}
+
+
+def roman(n: int) -> str:
+    out = ""
+    for v, r in ((10, "X"), (9, "IX"), (5, "V"), (4, "IV"), (1, "I")):
+        while n >= v:
+            out, n = out + r, n - v
+    return out
+
+
+def cite(nums) -> str:
+    return ", ".join(f"[{n}]" for n in nums)
+
+
+def writing_boxes(ctx: Dict[str, Any], kind: str, label: str) -> str:
+    """Reserved (empty, clearly labelled) writing space the authors fill with their own method/results text.
+    Added only when the evidence-derived text alone cannot reach the venue's minimum page count; never filler text."""
+    inches = float((ctx.get("writing_space") or {}).get(kind, 0))
+    boxes, n = [], 1
+    while inches > 0.4:
+        h = min(inches, 8.0)
+        boxes.append(f"[[BOX: AUTHORS TO WRITE: {label} (reserved space, part {n}) | {h:.1f}]]")
+        inches -= h
+        n += 1
+    return "\n\n".join(boxes)
+
+
+def table(rows: List[List[Any]]) -> str:
+    """Section-text table markup: lines starting with '|' (first row is the header)."""
+    return "\n".join("| " + " | ".join(str(c).replace("|", "/") for c in r) for r in rows)
+
+
 # ---------------------------------------------------------------------------------------------------------------------
 class LiteratureDiscoveryAgent:
     """Agent 1: ranked reading list from scholarly sources (live APIs when available, else the local corpus)."""
@@ -125,9 +208,10 @@ class LiteratureDiscoveryAgent:
     def step(self, ctx: Dict[str, Any], connector: ResearchDataConnector) -> Dict[str, Any]:
         topic = ctx.get("topic", "edge AI hardware porting frameworks")
         warnings: List[str] = []
+        self.target_count = int(ctx.get("target_refs", 6))        # a 6-8 page paper needs a longer reading list
 
         print(f"    [LiteratureDiscoveryAgent] Querying scholarly sources for: '{topic}'")
-        live = connector.search_online_papers(expand_query(topic), max_results=self.target_count, agent_id="LiteratureDiscoveryAgent")
+        live = connector.search_online_papers(expand_query(topic), max_results=max(self.target_count, 10), agent_id="LiteratureDiscoveryAgent")
         local = connector.read_paper_corpus("", agent_id="LiteratureDiscoveryAgent")
 
         pool: Dict[str, Dict[str, Any]] = {}
@@ -161,7 +245,8 @@ class LiteratureDiscoveryAgent:
                 "ref_num": idx, "id": p.get("id", f"REF_{idx}"), "title": p.get("title", "Untitled"),
                 "year": year_of(p) or "n.d.", "venue": p.get("venue", "Unknown Venue"),
                 "authors": p.get("authors") or ["Unknown"],
-                "summary": strip_cites(p.get("abstract") or "") or "No abstract available.",
+                "summary": (strip_cites(clean_text(p.get("abstract") or "")) if looks_english(clean_text(p.get("abstract") or ""))
+                            else "No English abstract available.") or "No abstract available.",
                 "keywords": p.get("keywords", []), "doi": doi,
                 "source": p["source"], "relevance": rel, "topic_match": rel >= 0.3,
                 "source_link": f"https://doi.org/{doi}" if doi != "N/A" else "",
@@ -279,42 +364,174 @@ class DraftingWritingAgent:
         return "generic"
 
     def build_section(self, ctx: Dict[str, Any], title: str) -> str:
-        """Build ONE section (also used by the self-healer to regenerate only a failing section)."""
+        """Build ONE section (also used by the self-healer). `depth` (0-4) controls how much evidence-derived
+        material is included; nothing is ever invented: results/methods stay as marked author placeholders."""
         topic = ctx.get("topic", "Research Topic")
         venue = ctx.get("venue", "IEEE Conference")
         refs = ctx.get("reading_list", [])
         gap = ctx.get("gap_analysis", {})
+        d = int(ctx.get("depth", 1))
         pack = get_pack(ctx.get("domain") or detect_domain(topic))
         kind = self._kind(title)
+        info = analyze_literature(ctx)
+        usable = [p for p in refs if not p["summary"].startswith("No ")]
+        cov = gap.get("term_coverage", {})
+        thin = [w for w, c in cov.items() if c <= 1]
+        well = [w for w, c in cov.items() if c >= max(3, len(refs) // 2)]
+        main = topic
+
         if kind == "lit":
-            lines = [AI_TAG, f"The retrieved literature on {topic} comprises {len(refs)} papers:"]
-            for p in refs:
-                lines.append(
-                    f"  - [{p['ref_num']}] {', '.join(p['authors'][:3])}{' et al.' if len(p['authors']) > 3 else ''} "
-                    f"({p['year']}), \"{p['title']}\", {p['venue']}. DOI: {p['doi']} [Source: {p['source']}]\n"
-                    f"    Summary: {first_sentence(p['summary'])}")
-            return "\n".join(lines)
+            if d == 0:
+                lines = [AI_TAG, f"The retrieved literature on {topic} comprises {len(refs)} papers:"]
+                for p in refs:
+                    lines.append(
+                        f"  - [{p['ref_num']}] {', '.join(p['authors'][:3])}{' et al.' if len(p['authors']) > 3 else ''} "
+                        f"({p['year']}), \"{p['title']}\", {p['venue']}. DOI: {p['doi']} [Source: {p['source']}]\n"
+                        f"    Summary: {first_sentence(p['summary'])}")
+                return "\n".join(lines)
+            yrs = f"between {info['years'][0]} and {info['years'][1]}" if info["years"] else "in recent years"
+            out = [AI_TAG,
+                   f"We reviewed {len(refs)} papers on {topic}, published {yrs}"
+                   + (f" in venues including {', '.join(info['venues'])}" if info["venues"] else "")
+                   + f". They were retrieved from {', '.join(sorted({p['source'] for p in refs}))} and ranked by topical relevance. "
+                   f"{len(usable)} of them provide an abstract that is quoted below; claims are attributed to the paper that makes them."]
+            sents = 2 if d >= 2 else 1
+            for term, nums in info["themes"].items():
+                out.append(f"### Work on {term}")
+                for n in nums:
+                    p = refs[n - 1]
+                    if p["summary"].startswith("No "):
+                        out.append(f"{p['authors'][0]}{' et al.' if len(p['authors']) > 1 else ''} [{n}] ({p['year']}) address this theme; no English abstract was available to summarise.")
+                    else:
+                        out.append(f"{p['authors'][0]}{' et al.' if len(p['authors']) > 1 else ''} [{n}] ({p['year']}): {sentences(p['summary'], sents)}")
+            if info["other"]:
+                out.append("### Other related work")
+                for n in info["other"]:
+                    p = refs[n - 1]
+                    out.append(f"{p['authors'][0]}{' et al.' if len(p['authors']) > 1 else ''} [{n}] ({p['year']}): "
+                               + (sentences(p['summary'], sents) if not p["summary"].startswith("No ") else "no English abstract available."))
+            if d >= 2:
+                out.append("### Comparison of Retrieved Studies")
+                rows = [["Ref", "Year", "Venue", "Source", "Rel."]]
+                for p in refs:
+                    rows.append([f"[{p['ref_num']}]", p["year"], (p["venue"] or "n.p.")[:34], p["source"].split(" ")[0], p["relevance"]])
+                out.append(table(rows))
+            if d >= 3 and cov:
+                out.append("### Coverage of the Topic Terms")
+                out.append("Number of retrieved papers whose title, abstract or keywords contain each topic term:")
+                out.append(table([["Term", "Papers"]] + [[w, c] for w, c in cov.items()]))
+                out.append("### Evidence Summary")
+                out.append(table([["Ref", "Supporting sentence from the cited paper"]] +
+                                 [[f"[{p['ref_num']}]", sentences(p["evidence"]["supporting_sentence"] or p["summary"], 1)[:150] or "-"]
+                                  for p in usable]))
+            if d >= 4:
+                out.append("### Relevance of Each Study to This Work")
+                tset = set(terms(topic))
+                for p in refs:
+                    matched = sorted(tset & set(terms(_paper_text(p))))
+                    out.append(f"[{p['ref_num']}] matches the topic terms {', '.join(matched) or 'none'} (relevance {p['relevance']}).")
+            return "\n\n".join(out)
+
         if kind == "unique":
-            return (f"{AI_TAG}\nPRELIMINARY NOVELTY ASSESSMENT: {gap.get('novelty_flag', 'n/a')}\n"
+            base = (f"{AI_TAG}\nPRELIMINARY NOVELTY ASSESSMENT: {gap.get('novelty_flag', 'n/a')}\n"
                     f"Closest prior work: {'; '.join(gap.get('closest_prior_work', [])) or 'none'}\n"
                     f"Candidate angles:\n" + "\n".join(f"  - {a}" for a in gap.get("why_our_work_is_unique", []))
                     + f"\nUNCERTAINTY: {gap.get('uncertainty', '')}")
+            if d >= 1 and cov:
+                base += "\n\n" + table([["Topic term", "Papers covering it"]] + [[w, c] for w, c in cov.items()])
+            if d >= 2:
+                base += ("\n\nThe assessment is lexical: it counts how many retrieved papers contain each topic term. A term covered by at most one "
+                         f"paper ({', '.join(thin) or 'none'}) marks a candidate angle; heavily covered terms ({', '.join(well) or 'none'}) "
+                         "must not be claimed as novel. The authors must confirm every novelty claim against a full literature search.")
+            return base
+
         if kind == "intro":
-            return (f"{AI_TAG}\nThis work addresses {topic}, targeting {venue}. "
-                    f"Preliminary novelty assessment: {gap.get('novelty_flag', 'n/a')}. "
-                    f"Contributions must be stated by the authors.")
+            out = [AI_TAG, f"This work addresses {topic}, targeting {venue}. "
+                           f"Preliminary novelty assessment: {gap.get('novelty_flag', 'n/a')}. Contributions must be stated by the authors."]
+            if d >= 1 and refs:
+                yrs = f" published between {info['years'][0]} and {info['years'][1]}" if info["years"] else ""
+                themes = ", ".join(info["themes"]) or "no dominant theme"
+                out.append(f"### Background\nThe {len(refs)} papers retrieved for this study{yrs} recur on the themes of {themes} "
+                           f"{cite(sum(info['themes'].values(), [])[:6])}. Section II reviews them in detail.")
+                coverage = (f"the terms {', '.join(thin)} are covered by at most one retrieved paper" if thin
+                            else "every topic term is covered by several retrieved papers, so novelty must come from the angle rather than the topic")
+                coverage += (f", whereas {', '.join(well)} are covered by many" if thin and well else "")
+                out.append(f"### Problem Statement\nWithin this literature, {coverage}. The authors should state precisely which "
+                           f"open problem on {main} this work addresses and why existing studies "
+                           f"{cite([int(x.split(']')[0][1:]) for x in gap.get('closest_prior_work', [])[:3]])} do not already solve it.")
+            if d >= 2:
+                rqs = thin[:3] or list(cov)[:2]
+                out.append("### Research Questions\n" + "\n".join(
+                    f"RQ{i}. [AUTHORS TO CONFIRM] How does {t} affect {main}?" for i, t in enumerate(rqs, 1)))
+                out.append("### Contributions\n[AUTHORS TO STATE: list the contributions this work claims. The assistant does not assert contributions.]")
+                titles = [t.split(". ", 1)[-1] for t in self.make_outline(ctx)]
+                out.append("### Organization\nThe remainder of this paper is organized as follows. " + " ".join(
+                    f"Section {roman(i)} covers {t.lower()}." for i, t in enumerate(titles[1:], 2)))
+            return "\n\n".join(out)
+
         if kind == "method":
-            return (f"{AI_TAG}\n[AUTHORS TO COMPLETE: describe the proposed method for {topic}. {pack.guidance_text()}. "
-                    f"The assistant does not invent design details.]")
+            out = [AI_TAG, f"[AUTHORS TO COMPLETE: describe the proposed method for {topic}. {pack.guidance_text()}. "
+                           f"The assistant does not invent design details.]"]
+            if d >= 1:
+                out.append("### Problem Formulation\n[AUTHORS TO COMPLETE: define the inputs, outputs, constraints and objective of the problem, "
+                           f"using the terminology of the related work {cite([p['ref_num'] for p in refs[:3]])}.]")
+            if d >= 2 and info["themes"]:
+                out.append("### Design Dimensions Suggested by the Literature")
+                out.append(table([["Dimension", "Studies", "What the authors must specify"]] +
+                                 [[t, cite(n[:4]), f"how the method handles {t}"] for t, n in info["themes"].items()]))
+            wb = writing_boxes(ctx, "method", "methodology")
+            if wb:
+                out.append(wb)
+            if d >= 3:
+                out.append("### System Overview\n[[BOX: Figure 1 - AUTHORS TO INSERT: architecture / workflow diagram | 2.6]]")
+            return "\n\n".join(out)
+
         if kind == "experiment":
-            base = ", ".join("[" + str(p["ref_num"]) + "]" for p in refs[:4])
-            return (f"{AI_TAG}\n[AUTHORS TO COMPLETE: experimental setup, baselines drawn from {base}, metrics and "
-                    f"measured results. No results are claimed by the assistant.]")
+            base_refs = cite([p["ref_num"] for p in refs[:4]])
+            out = [AI_TAG, f"[AUTHORS TO COMPLETE: experimental setup, baselines drawn from {base_refs}, metrics and measured results. "
+                           f"No results are claimed by the assistant.]"]
+            if d >= 1:
+                out.append("### Evaluation Protocol")
+                out.append("Candidate baselines from the retrieved literature (the authors choose which to run):\n" +
+                           "\n".join(f"- {p['title']} [{p['ref_num']}]" for p in refs[:6]))
+                if info["metrics"]:
+                    out.append("Metrics mentioned in the retrieved abstracts: " + "; ".join(
+                        f"{m} {cite(r[:3])}" for m, r in list(info["metrics"].items())[:6]) + ".")
+                out.append(pack.guidance_text() + ".")
+            if d >= 2:
+                cols = list(info["metrics"])[:3] or ["Metric 1", "Metric 2"]
+                rows = [["Method"] + cols] + [[f"Baseline [{p['ref_num']}]"] + ["TBD"] * len(cols) for p in refs[:3]] + [["Proposed"] + ["TBD"] * len(cols)]
+                out.append("### Results\nTABLE I (values to be measured and entered by the authors; the assistant reports no results):\n" + table(rows))
+            wb = writing_boxes(ctx, "experiment", "experimental setup and results")
+            if wb:
+                out.append(wb)
+            if d >= 4:
+                abl = [["Variant"] + cols + ["Notes"]] + [[f"{v}"] + ["TBD"] * len(cols) + ["-"] for v in ("Full method", "Without component A", "Without component B")]
+                out.append("TABLE II (ablation; values to be measured and entered by the authors):\n" + table(abl))
+            if d >= 3:
+                out.append("[[BOX: Figure 2 - AUTHORS TO INSERT: main result plot | 3.0]]")
+                out.append("[[BOX: Figure 3 - AUTHORS TO INSERT: ablation or sensitivity plot | 3.0]]")
+            return "\n\n".join(out)
+
         if kind == "domain":
-            return f"{AI_TAG}\n[AUTHORS TO COMPLETE: {title}. {pack.guidance_text()}.]"
+            out = [AI_TAG, f"[AUTHORS TO COMPLETE: {title}. {pack.guidance_text()}.]"]
+            if d >= 1:
+                out.append(table([["Checklist item", "Status"]] + [[g, "authors to complete"] for g in pack.method_guidance]))
+            return "\n\n".join(out)
+
         if kind == "conclusion":
-            return (f"{AI_TAG}\n[AUTHORS TO COMPLETE: summarize validated findings and future work on {topic} "
-                    f"once results exist.]")
+            out = [AI_TAG, f"[AUTHORS TO COMPLETE: summarize validated findings and future work on {topic} once results exist.]"]
+            if d >= 1:
+                out.append("### Threats to Validity\n" + "\n".join([
+                    f"- Literature coverage: conclusions rest on {len(refs)} retrieved papers; relevant work outside the searched sources may exist.",
+                    "- Novelty estimate: the gap analysis is lexical and does not understand meaning; it must be verified manually.",
+                    "- Abstract-level evidence: statements are attributed from abstracts, not full texts.",
+                ] + (["- Data source: references come from the local MOCK corpus and must not be cited in a real submission."]
+                     if all("mock" in p["source"] for p in refs) else [])))
+            if d >= 2:
+                out.append("### Future Work\n" + "\n".join(f"- Investigate {t} in the context of {main}." for t in (thin[:3] or list(cov)[:2])))
+            return "\n\n".join(out)
+
         return f"{AI_TAG}\n[AUTHORS TO COMPLETE: content for this section on {topic}.]"
 
     def _ensure_all_cited(self, ctx: Dict[str, Any], sections: Dict[str, str], outline: List[str]):

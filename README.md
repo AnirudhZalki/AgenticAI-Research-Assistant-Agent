@@ -53,6 +53,13 @@ This repository contains the complete implementation of the **Research Assistant
 | 13 | Pluggable domain packs (CS/AI, Biosciences, Materials) with checkable rules; venue parser, IEEE/ACM/APA/BibTeX, originality screen | `domain.py` |
 | 14 | Capstone coordinator with the proposal's hybrid sequential/parallel methodology, dashboard, continuous radar | `coordinator.py`, `radar.py`, `research_agent.py`, `app.py` |
 
+### Paper length (6-8 page conference papers)
+`paper_builder.py` typesets the draft as an IEEE-style two-column PDF with an exact page count. The coordinator fits the paper to the venue's
+page range (default: the venue's page limit up to +2 pages, e.g. 6-8) by choosing how much evidence-derived material to include (reading list
+sized to the venue, thematic related work, comparison and coverage tables, evaluation protocol, threats to validity). Methods and results are
+never invented: where the evidence alone is too short, the PDF holds **clearly labelled empty boxes** for the authors' own figures, methods and
+results, and the app reports "evidence-based pages" and "reserved for authors" separately.
+
 ### Proposal guardrails and where they are enforced
 | Guardrail | Enforcement |
 |---|---|
@@ -97,6 +104,7 @@ AgenticAI-Research-Assistant-Agent/
 ├── sdlc.py                  # Lab 11
 ├── governance.py            # Lab 12
 ├── domain.py                # Lab 13
+├── paper_builder.py         # IEEE-style two-column PDF typesetter (exact page count)
 ├── tracker.py               # Version history / repository
 ├── healing.py               # Lab 10: self-healing + fault injection
 ├── access.py                # Lab 12: roles & confidentiality
@@ -150,7 +158,7 @@ test_lab_12_safety_governance ... ok
 test_lab_13_domain_agent ... ok
 test_lab_14_capstone_end_to_end ... ok
 ----------------------------------------------------------------------
-Ran 25 tests
+Ran 26 tests
 
 OK
 ```

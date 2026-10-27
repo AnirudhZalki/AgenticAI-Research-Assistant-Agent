@@ -225,3 +225,8 @@ def all_pack_abbreviations() -> Dict[str, List[str]]:
     for p in PACKS.values():
         out.update(p.abbreviations)
     return out
+
+
+def smart_title(topic: str) -> str:
+    """Title-case a topic but keep acronyms (AI, GRU, IoT) as typed."""
+    return " ".join(w if (w.isupper() or any(c.isupper() for c in w[1:])) else w[:1].upper() + w[1:] for w in (topic or "").split())

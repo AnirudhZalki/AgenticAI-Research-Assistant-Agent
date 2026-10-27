@@ -34,6 +34,7 @@ from langchain_orchestrator import LangChainOrchestrator
 from mcp_server import MCPServer
 from memory import MemoryStore
 from openclaw_runtime import OpenClawAgentRuntime
+from paper_builder import render_pdf
 from ops import CircuitBreaker, FaultInjector, OpsAgent, Tracer, instrument
 from radar import RadarMonitor
 from search import SearchTools
@@ -72,6 +73,7 @@ class ResearchCoordinator:
         self.approved = False
         self.ctx: Dict[str, Any] = {}
         self.blueprint = None
+        self.paper_pdf = b""
         self.healer = SelfHealer(self)
         self.metrics_history: List[Dict[str, Any]] = []
         self.radar_monitor: Optional[RadarMonitor] = None
@@ -111,6 +113,11 @@ class ResearchCoordinator:
         self.ctx["approved_sources"] = list(DEFAULT_APPROVED_SOURCES)
         self.ctx["domain"] = request.get("domain") or detect_domain(state["topic"])
         self.ctx["stages_done"] = []
+        spec = parse_venue(state["venue"])
+        self.ctx["target_refs"] = max(8, min(24, round(spec.word_limit / 250)))        # a 6-8 page paper cites ~18 works
+        self.ctx["page_range"] = [int(request.get("pages_min") or spec.page_limit),
+                                  int(request.get("pages_max") or spec.page_limit + 2)]
+        self.ctx["depth"] = 1
         self.ctx["prior_tasks"] = self.memory.retrieve_prior_tasks(state["topic"])
         self.memory.update_session("clarified_state", state)
         self._log("Gate 1: Intake", "RequestClarifier", state)
@@ -196,10 +203,75 @@ class ResearchCoordinator:
         self._log("Validation", "Acceptance gate", rep["diagnosis"], "PASS" if rep["passed"] else "FAIL")
         return rep
 
+    # ------------------------------------------------------------- paper length (venue page range)
+    def render_paper(self) -> Dict[str, Any]:
+        """Typeset the current draft as an IEEE-style two-column PDF and record its exact page count."""
+        ctx = dict(self.ctx)
+        sections = dict(ctx.get("draft_sections", {}))
+        for sec, notes in ctx.get("collab_annotations", {}).items():
+            if sec in sections:
+                sections[sec] = sections[sec] + "\n" + "\n".join(notes)
+        ctx["draft_sections"] = sections
+        out = render_pdf(ctx, self.blueprint.title if self.blueprint else "")
+        self.paper_pdf = out["pdf"]
+        lo, hi = self.ctx.get("page_range", [6, 8])
+        pages = out["pages"]
+        status = "IN RANGE" if lo <= pages <= hi else ("TOO SHORT" if pages < lo else "TOO LONG")
+        note = {"IN RANGE": f"{pages} pages, within the {lo}-{hi} page range.",
+                "TOO SHORT": (f"Only {pages} pages could be produced from the available evidence ({len(self.ctx.get('reading_list', []))} "
+                              f"references). The remaining pages must come from the authors' methods and results; enable live "
+                              f"academic APIs for a longer literature base. No filler text was added."),
+                "TOO LONG": f"{pages} pages exceeds the {hi}-page maximum; reduce the draft depth or trim sections."}[status]
+        self.ctx["paper_info"] = {"pages": pages, "min": lo, "max": hi, "status": status, "note": note,
+                                  "depth": self.ctx.get("depth", 1), "reserved_pages": out["reserved_pages"],
+                                  "evidence_pages": round(max(pages - out["reserved_pages"], 0), 1)}
+        return self.ctx["paper_info"]
+
+    def fit_depth(self):
+        """Choose how much evidence-derived material to include so the typeset paper lands in the venue's page range.
+        Uses silent agent calls for the trial runs; never pads with filler."""
+        lo, hi = self.ctx.get("page_range", [6, 8])
+        tried = []
+        for depth in range(0, 5):
+            self.ctx["depth"] = depth
+            self.orch.draft_agent.step(self.ctx, self.connector)
+            self.orch.comp_agent.step(self.ctx, self.connector)
+            tried.append((depth, self.render_paper()["pages"]))
+            if tried[-1][1] >= lo:
+                break
+        depth, pages = tried[-1]
+        if pages > hi and len(tried) > 1:
+            depth = tried[-2][0]
+        self.ctx["depth"] = depth
+        self.ctx["depth_trials"] = tried
+        # Evidence alone is not enough? Reserve clearly labelled writing space for the authors' own method/results.
+        def pages_with(extra: float) -> int:
+            self.ctx["writing_space"] = {"method": round(extra * 0.35, 1), "experiment": round(extra * 0.65, 1)} if extra else {}
+            self.orch.draft_agent.step(self.ctx, self.connector)
+            self.orch.comp_agent.step(self.ctx, self.connector)
+            return self.render_paper()["pages"]
+        extra = 0.0
+        if pages_with(0) < lo and depth == 4:
+            good, step = 0.0, 6.0
+            while step <= 55 and pages_with(step) < lo:        # grow until the minimum page count is reached ...
+                good, step = step, step * 2
+            step = min(step, 55.0)
+            for _ in range(5):                                   # ... then tighten to the smallest sufficient space
+                mid = (good + step) / 2
+                if pages_with(mid) >= lo:
+                    step = mid
+                else:
+                    good = mid
+            extra = step
+            pages_with(extra)
+        self.ctx["writing_space"] = {"method": round(extra * 0.35, 1), "experiment": round(extra * 0.65, 1)} if extra else {}
+        self.ctx["reserved_writing_inches"] = round(extra, 1)
+
     def generate_and_validate(self, max_attempts: int = 3) -> Dict[str, Any]:
         """Draft once, check, validate; on failure SELF-HEAL (repair only the failing part) within a bounded budget,
         and escalate to the human with a diagnosis if it cannot be repaired."""
         self.ctx.pop("escalation", None)
+        self.fit_depth()
         self.draft()
         self.check()
         rep = self.validate()
@@ -230,6 +302,7 @@ class ResearchCoordinator:
             "sections": sections, "references": refs}, venue_spec=spec.citation_style)
         self.ctx["formatted_paper"] = text
         self.memory.update_session("current_draft", text)
+        self.render_paper()
         self.ctx["acceptance"] = self.acceptance_suite()
         return text
 

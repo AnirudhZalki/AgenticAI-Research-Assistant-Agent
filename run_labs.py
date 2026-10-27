@@ -376,6 +376,36 @@ class TestResearchAgentLabs(unittest.TestCase):
         self.assertFalse(m.running)
         print("  [PASS] Radar monitor: background checks, new-alert detection.")
 
+    def test_paper_fits_venue_page_range(self):
+        """Paper length: typeset IEEE-style PDF lands in the venue's page range; thin evidence is reported, not padded."""
+        import random
+        random.seed(3)
+        topics = ["quantization", "pruning", "compilation", "memory scheduling", "energy efficiency", "benchmarking"]
+        papers = [{"id": f"OA_{i}", "title": f"{topics[i % 6].title()} for Edge AI Hardware Porting Frameworks {i}",
+                   "authors": [f"A{i} X", f"B{i} Y"], "year": 2019 + i % 6, "venue": "IEEE Micro",
+                   "abstract": f"We study {topics[i % 6]} for edge AI hardware porting on microcontrollers. Latency and memory "
+                               f"are measured across frameworks. Results indicate improved deployment efficiency.",
+                   "keywords": [], "doi": f"10.1000/e.{i}", "source": "OpenAlex"} for i in range(24)]
+        c = ResearchCoordinator(use_live=True, checkpoint_file="checkpoint_app.json")
+        c.tools.search_online = lambda q, n=6: papers
+        res = c.run_all(REQUEST)
+        info = c.ctx["paper_info"]
+        self.assertTrue(res["validation"]["passed"])
+        self.assertTrue(c.paper_pdf.startswith(b"%PDF"))
+        self.assertGreaterEqual(info["pages"], 6)
+        self.assertLessEqual(info["pages"], 8)
+        self.assertEqual(info["status"], "IN RANGE")
+        self.assertGreaterEqual(len(c.ctx["reading_list"]), 15)
+        # placeholders are never filled with invented content
+        self.assertIn("AUTHORS TO", " ".join(c.ctx["draft_sections"].values()))
+        # offline mock corpus: fits only by reserving labelled space for the authors, and says how much
+        c2 = ResearchCoordinator(checkpoint_file="checkpoint_app.json")
+        c2.run_all(REQUEST)
+        i2 = c2.ctx["paper_info"]
+        self.assertGreater(i2["reserved_pages"], 0)
+        self.assertLessEqual(i2["pages"], 8)
+        print("  [PASS] Paper length: typeset PDF fits the venue page range with transparent reserved space.")
+
 def run_all_tests():
     print("==========================================================================")
     print("      AUTOMATED VERIFICATION SUITE (LANGCHAIN + OPENCLAW + MCP LABS 1 - 14)")
